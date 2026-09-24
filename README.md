@@ -21,10 +21,13 @@ The other CI checks:
 
 ```bash
 python3 scripts/verify_wasm.py
+python3 scripts/gen_clients.py --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo build -p xoxno-contract-sdk --target wasm32v1-none
-cargo build -p lending-vault --target wasm32v1-none --release
+stellar contract build --package lending-vault
 ```
+
+`soroban-sdk` 28 builds contracts only through `stellar contract build`
+(stellar-cli 25.2 or newer).
 
 ## Update the embedded WASM
 

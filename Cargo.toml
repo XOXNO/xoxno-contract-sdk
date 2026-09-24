@@ -11,7 +11,7 @@ homepage = "https://xoxno.com"
 authors = ["XOXNO"]
 
 [workspace.dependencies]
-soroban-sdk = "27.0.6"
+soroban-sdk = "28.0.0"
 xoxno-contract-sdk = { version = "0.1.0", path = "crates/xoxno-contract-sdk" }
 
 [workspace.lints.rust]

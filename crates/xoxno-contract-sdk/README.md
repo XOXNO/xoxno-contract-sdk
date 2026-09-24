@@ -23,7 +23,9 @@ xoxno-contract-sdk = "0.1"
 xoxno-contract-sdk = { version = "0.1", features = ["testutils"] }
 ```
 
-The crate is `no_std` and uses `soroban-sdk` 27.
+The crate is `no_std` and uses `soroban-sdk` 28. Build your contract with
+`stellar contract build` (stellar-cli 25.2 or newer), as `soroban-sdk` 28
+requires.
 
 ## Call XOXNO Lending from a contract
 
@@ -155,7 +157,7 @@ release's attested SDK bundle (`"method": "release"`).
 
 | xoxno-contract-sdk | soroban-sdk | rs-lending-xlm |
 |---|---|---|
-| 0.1.x | 27 | v1.0.0 (`d26b93ebb`) |
+| 0.1.x | 28 | v1.0.0 (`d26b93ebb`) |
 
 ## License
 

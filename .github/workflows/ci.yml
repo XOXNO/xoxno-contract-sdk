@@ -51,11 +51,8 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
-      - name: The crate builds without std
-        run: cargo build -p xoxno-contract-sdk --target wasm32v1-none
-
-      - name: The example contract builds for wasm32v1-none
-        run: cargo build -p lending-vault --target wasm32v1-none --release
+      - name: The example contract, and the crate without std, build for wasm32v1-none
+        run: stellar contract build --package lending-vault
 
       - name: Package contents
         run: |

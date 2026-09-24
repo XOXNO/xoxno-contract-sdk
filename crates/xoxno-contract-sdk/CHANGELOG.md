@@ -18,3 +18,6 @@ fixture API changed.
   `authorize_transfer_as_current` helpers.
 - Mainnet and testnet addresses, hub ids and spoke ids.
 - `testutils::LendingFixture`, with USDC and XLM market presets.
+- Builder-facing clients generated from the embedded WASM, holding only the
+  functions a builder calls.
+- Built on `soroban-sdk` 28.
