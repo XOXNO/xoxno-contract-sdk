@@ -2,7 +2,7 @@
   "source": {
     "repository": "XOXNO/rs-lending-xlm",
     "tag": "v1.1.0",
-    "commit": "1053ae0333e0ef725b24091bd4f296f4759e1ca8",
+    "commit": "dc57a856293b5ca70a40f128de2d6fd243b45177",
     "method": "release"
   },
   "contracts": {

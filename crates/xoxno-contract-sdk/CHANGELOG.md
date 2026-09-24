@@ -6,6 +6,15 @@ All notable changes to this crate are recorded here. The format follows
 means the embedded WASM, the ABI, the `soroban-sdk` major version or the
 fixture API changed.
 
+## [0.2.2] - 2026-09-24
+
+### Changed
+
+- `wasm/MANIFEST.json` points at the re-cut rs-lending-xlm `v1.1.0` tag,
+  commit `dc57a8562` (the first `v1.1.0` tag, at `1053ae033`, was deleted).
+  Its attested build is byte-identical to the embedded WASM: every contract,
+  file with docs, code hash and mock matches.
+
 ## [0.2.1] - 2026-09-24
 
 ### Added
