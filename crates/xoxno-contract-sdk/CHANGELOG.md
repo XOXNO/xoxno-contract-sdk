@@ -14,8 +14,9 @@ fixture API changed.
   supply, borrow, repay, withdraw, liquidate, flash loans, positions, market
   discovery across hubs and spokes, rates, and prices. `LendingAddresses` and
   `Position` go with it.
-- Examples: `account-basics`, `market-picker`, `price-reader`, `liquidator`
-  and `lending-vault`.
+- `XoxnoLending::deposit`: supply to an account, or open one with account id 0.
+- Examples: `simple-deposit`, `account-basics`, `market-picker`,
+  `price-reader`, `liquidator` and `lending-vault`.
 - Clients and types for the XOXNO Lending controller, pool, position NFT and
   price aggregator, generated from the rs-lending-xlm `v1.0.0` build that is
   deployed on mainnet.

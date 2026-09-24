@@ -119,6 +119,20 @@ impl XoxnoLending {
         self.supply_to(NEW_ACCOUNT, spoke_id, market, amount)
     }
 
+    /// Supplies `amount` of `market` to `account_id` and returns the account
+    /// id. With `account_id` = [`NEW_ACCOUNT`] it opens a new account in
+    /// `spoke_id` (the returned id is the new position NFT's token id);
+    /// otherwise `spoke_id` must be the account's spoke.
+    pub fn deposit(
+        &self,
+        account_id: u64,
+        spoke_id: u32,
+        market: &HubAssetKey,
+        amount: i128,
+    ) -> u64 {
+        self.supply_to(account_id, spoke_id, market, amount)
+    }
+
     /// Supplies `amount` more to an existing account of the current contract.
     pub fn supply(&self, account_id: u64, market: &HubAssetKey, amount: i128) -> u64 {
         let spoke_id = self

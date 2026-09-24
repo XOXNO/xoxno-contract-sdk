@@ -31,6 +31,27 @@ The crate is `no_std` and uses `soroban-sdk` 28. Build your contract with
 `stellar contract build` (stellar-cli 25.2 or newer), as `soroban-sdk` 28
 requires.
 
+## Deposit in one call
+
+The caller passes the token, hub, spoke and account; nothing is stored in your
+contract. `account_id` 0 opens a new account and returns its id, which is the
+position NFT's token id. Pass the id back to add to the same account.
+
+```rust,ignore
+pub fn deposit(env: Env, from: Address, token: Address, hub_id: u32,
+               spoke_id: u32, account_id: u64, amount: i128) -> u64 {
+    from.require_auth();
+    token::Client::new(&env, &token).transfer(&from, env.current_contract_address(), &amount);
+
+    let lending = XoxnoLending::mainnet(&env);
+    let market = lending.market(hub_id, &token);
+    lending.deposit(account_id, spoke_id, &market, amount)
+}
+```
+
+`lending.deposit` creates the token authorization the protocol needs. The
+`simple-deposit` example is this function with tests.
+
 ## Accounts
 
 An account is a position NFT. The first supply opens it: the controller mints
@@ -203,6 +224,7 @@ Each example in the repository is a contract with tests on `LendingFixture`:
 
 | Example | Shows |
 |---|---|
+| `simple-deposit` | The smallest deposit: token, hub, spoke and account as parameters |
 | `account-basics` | First supply returns the NFT id; reuse it; borrow, repay, withdraw; reopen after the account closes |
 | `market-picker` | Find the hub that lists a token and a spoke that accepts it; read rates and utilization |
 | `price-reader` | Strict and tolerant prices, USD values, borrow headroom in tokens |
