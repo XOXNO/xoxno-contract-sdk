@@ -38,14 +38,16 @@ python3 scripts/sync_wasm.py --release <rs-lending-xlm tag>
 
 The script:
 
-- verifies each file's build attestation;
+- verifies each file's build attestation, signed by the rs-lending-xlm
+  `release.yml` workflow;
 - checks that its code equals the stripped deploy artifact, and that the
   artifact hash equals the live mainnet contract hash;
 - writes `wasm/MANIFEST.json` and `src/networks.rs`.
 
-`--build-dir` takes a local rs-lending-xlm checkout after
-`make build deploy-artifacts` instead. `--allow-undeployed` accepts code that
-is not on mainnet yet, and is for pre-releases only.
+`--build-dir` takes a clean local rs-lending-xlm checkout of a tag after
+`make build deploy-artifacts` instead; 0.1.0 was synced this way from
+`v1.0.0`, whose release predates the SDK bundle. `--allow-undeployed` accepts
+code that is not on mainnet yet, and is for pre-releases only.
 
 The `Mainnet drift` workflow runs `scripts/check_mainnet.py` every day. It
 fails when mainnet runs code that the SDK does not embed.
@@ -54,11 +56,13 @@ fails when mainnet runs code that the SDK does not embed.
 
 1. Sync the WASM if mainnet changed. Bump the version in
    `crates/xoxno-contract-sdk/Cargo.toml` and in the workspace `Cargo.toml`
-   dependency entry. Add the version's section to `CHANGELOG.md`.
+   dependency entry. Add the version's dated section to `CHANGELOG.md`
+   (`## [X.Y.Z] - YYYY-MM-DD`).
 2. Merge to `main`.
-3. Run the `Publish` workflow with the version. It checks the version, the
-   changelog and the WASM, runs the tests, publishes to crates.io with the
-   `CRATES_IO_TOKEN` secret, and tags and releases `vX.Y.Z`.
+3. Run the `Publish` workflow on `main` with the version. It checks the
+   version, the changelog, the WASM and the mainnet hashes, runs the tests,
+   publishes to crates.io with the `CRATES_IO_TOKEN` secret, and creates the
+   `vX.Y.Z` tag and GitHub release.
 
 ## License
 

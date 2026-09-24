@@ -3,7 +3,9 @@
 
 Reads each contract instance's WASM hash from the mainnet RPC and compares it
 with `deploy_sha256` in wasm/MANIFEST.json. A difference means mainnet was
-upgraded and a new SDK release is due.
+upgraded and a new SDK release is due. It checks the contract addresses in
+MANIFEST.json; a price aggregator that governance replaced shows up only after
+the next sync.
 
 Usage: check_mainnet.py [--rpc-url URL]
 """

@@ -7,16 +7,19 @@ use soroban_sdk::{contractclient, Address, Bytes, Env};
 /// MyContract`.
 ///
 /// Rules:
+/// - Anyone can call this function directly with any arguments, and anyone can
+///   start a flash loan to any receiver. Call `require_auth()` on the pool
+///   address your contract stored at setup: it passes only when the pool is the
+///   direct caller. Then check `initiator`, which the controller authenticated.
 /// - Repay `amount + fee` by approving the pool as spender before the
 ///   callback returns; the pool then pulls the tokens with `transfer_from`.
 ///   Use [`approve_flash_repayment`](crate::lending::helpers::approve_flash_repayment).
 ///   Sending tokens to the pool directly makes the loan revert.
-/// - The receiver must be a contract, not an account.
+/// - The receiver must be a WASM contract; an account or a Stellar Asset
+///   Contract is rejected.
 /// - The receiver cannot be the contract that calls `flash_loan`, and the
 ///   callback cannot call the controller or the pool, not even their views:
 ///   Soroban rejects a call into a contract that is already on the call stack.
-/// - Check `initiator` and the pool address: anyone can start a flash loan to
-///   any receiver.
 #[contractclient(name = "FlashLoanReceiverClient")]
 pub trait FlashLoanReceiver {
     /// Receives the loan. `initiator` is the caller of `flash_loan` on the
@@ -40,15 +43,20 @@ pub trait FlashLoanReceiver {
 /// FlashPositionReceiver for MyContract`.
 ///
 /// Rules:
+/// - Anyone can call this function directly, and anyone can start a flash
+///   position with any receiver: the collateral the receiver sends goes into
+///   the account of the caller of `flash_position`. Call `require_auth()` on
+///   the controller address your contract stored at setup, then check
+///   `initiator`, which the controller authenticated.
 /// - Send the collateral to the controller with a plain token `transfer`. The
 ///   controller measures its balance change for each declared collateral and
 ///   deposits it into the account. It does not pull tokens or accept an
-///   approval.
+///   approval. Declared refund assets go back to the caller.
 /// - Tokens that were not declared as collateral or refund assets stay on the
 ///   controller and are lost to the caller.
-/// - The receiver must be a deployed WASM contract, and not the controller or
-///   the pool.
-/// - The callback cannot call the controller again.
+/// - The receiver must be a WASM contract, and not the controller or the pool.
+/// - The receiver cannot be the contract that calls `flash_position`, and the
+///   callback cannot call the controller again.
 #[contractclient(name = "FlashPositionReceiverClient")]
 pub trait FlashPositionReceiver {
     /// Receives the borrowed `amount` of `asset` for `account_id`.

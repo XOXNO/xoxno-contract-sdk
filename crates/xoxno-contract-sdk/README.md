@@ -60,7 +60,10 @@ A full working contract is in
   (`WITHDRAW_ALL`) pays the floored claim, which can be 1 unit less.
 - **Accounts.** Pass `NEW_ACCOUNT` to open an account. Moving the position NFT
   moves the account.
-- **Flash loans.** Repay by approving the pool for `amount + fee`
+- **Flash callbacks.** Anyone can call a receiver's callback directly and
+  forge its arguments. In the callback, call `require_auth()` on the pool (flash
+  loan) or controller (flash position) address the contract stored, then check
+  `initiator`. Repay a flash loan by approving the pool for `amount + fee`
   (`approve_flash_repayment`). The receiver cannot be the contract that calls
   `flash_loan`, and the callback cannot call the controller or the pool:
   Soroban rejects a call into a contract that is already on the call stack.
@@ -102,10 +105,13 @@ What the fixture does:
 - It deploys governance, the controller, the pool, the position NFT, the price
   aggregator and two mock oracles. Governance owns the controller, as on
   mainnet, and every configuration step goes through the governance timelock.
+  The fixture's spoke uses the liquidation curve of the mainnet "Blue Chip"
+  spoke.
 - `create_market` lists a 7-decimal Stellar Asset Contract token and
   configures a dual-source oracle. It then supplies the initial liquidity from a
   new liquidity provider. `MarketConfig::usdc()` and `MarketConfig::xlm()` use
-  the mainnet parameters.
+  the mainnet market parameters and "Blue Chip" asset settings. The oracle
+  configuration is the fixture's own, not mainnet's.
 - `set_price` moves both oracle feeds. `advance_time` moves the timestamp and
   the ledger sequence, publishes the prices again, and accrues interest.
 
@@ -113,7 +119,8 @@ It changes the `Env`:
 
 - It raises the timestamp to at least 1,000,000 and the sequence to at least
   100.
-- It raises the minimum persistent entry TTL to 10,000,000 ledgers.
+- It raises the minimum persistent entry TTL to 10,000,000 ledgers, and the
+  maximum entry TTL above it.
 - It sets the budget to unlimited. To check one call against the network
   limits, call `env.cost_estimate().budget().reset_default()` just before it.
 
@@ -140,6 +147,11 @@ The deployed artifact hash is checked against the live mainnet contract when
 the WASM is synced. The embedded files keep their contract spec docs and error
 enums, so the generated clients have rustdoc and typed errors. Their code is
 identical to the deployed code.
+
+Version 0.1.0 was synced from a clean rebuild of rs-lending-xlm `v1.0.0`
+(`"method": "build-dir"` in the manifest). The rebuild reproduced every
+mainnet hash. From the next rs-lending-xlm release on, the WASM comes from the
+release's attested SDK bundle (`"method": "release"`).
 
 | xoxno-contract-sdk | soroban-sdk | rs-lending-xlm |
 |---|---|---|

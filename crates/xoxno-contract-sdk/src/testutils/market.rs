@@ -53,8 +53,8 @@ pub struct MarketConfig {
 const UNIT: i128 = 10_000_000;
 
 impl MarketConfig {
-    /// USDC at $1 with the mainnet rate curve and the mainnet "Blue Chip"
-    /// spoke settings, seeded with 1,000,000 USDC.
+    /// USDC at $1 with the mainnet market parameters and the mainnet "Blue
+    /// Chip" asset settings, seeded with 1,000,000 USDC.
     pub fn usdc() -> Self {
         Self {
             symbol: "USDC",
@@ -86,8 +86,8 @@ impl MarketConfig {
         }
     }
 
-    /// XLM at $0.10 with the mainnet rate curve and the mainnet "Blue Chip"
-    /// spoke settings, seeded with 10,000,000 XLM.
+    /// XLM at $0.10 with the mainnet market parameters and the mainnet "Blue
+    /// Chip" asset settings, seeded with 10,000,000 XLM.
     pub fn xlm() -> Self {
         Self {
             symbol: "XLM",

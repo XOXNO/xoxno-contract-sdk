@@ -9,7 +9,7 @@ use super::governance::{
     self, AdminOperation, AssetOracle, ConfigureAssetOracleArgs, CreatePoolArgs,
     DeployPositionNftArgs, FeedNature, FeedSource, IndependencePolicy, MarketParamsRaw,
     MultiFeedRef, OracleAssetRef, OracleReadMode, PriceKey, PriceSource, ProviderRef,
-    ReflectorFeedRef, SpokeAssetArgs,
+    ReflectorFeedRef, SpokeAssetArgs, SpokeLiquidationCurveArgs,
 };
 use super::{mock_redstone, mock_reflector, Market, MarketConfig};
 use crate::lending::constants::{NEW_ACCOUNT, WAD};
@@ -31,13 +31,17 @@ const TWAP_RECORDS: u32 = 3;
 const PRICE_STALE_SECONDS: u64 = 86_400;
 const TOLERANCE_BPS: u32 = 500;
 const MAX_PRICE_WAD: i128 = 1_000_000_000 * WAD;
+const TARGET_HF_WAD: i128 = WAD * 115 / 100;
+const HF_FOR_MAX_BONUS_WAD: i128 = WAD * 90 / 100;
+const LIQUIDATION_BONUS_FACTOR_BPS: u32 = 1_500;
 
 /// XOXNO Lending deployed into a test [`Env`] from the embedded WASM.
 ///
 /// `deploy` changes the ledger of `env`: it raises the timestamp to at least
 /// 1,000,000 (the TWAP feed needs price history before "now"), raises the
 /// sequence to at least 100 (the timelock reserves ledger 1), raises the
-/// minimum persistent entry TTL to 10,000,000 ledgers (about 1.6 years, so
+/// minimum persistent entry TTL to 10,000,000 ledgers and the maximum entry
+/// TTL above it (about 1.6 years, so
 /// long [`advance_time`](Self::advance_time) jumps do not archive the
 /// protocol's entries), and moves the sequence forward by one ledger for each
 /// timelocked operation.
@@ -68,8 +72,9 @@ pub struct LendingFixture<'a> {
 
 impl<'a> LendingFixture<'a> {
     /// Deploys governance, the controller, the pool, the position NFT, the
-    /// price aggregator and both mock oracles, creates one hub and one spoke,
-    /// and unpauses the controller.
+    /// price aggregator and both mock oracles, creates one hub and one spoke
+    /// with the liquidation curve of the mainnet "Blue Chip" spoke, and
+    /// unpauses the controller.
     pub fn deploy(env: &Env, admin: &Address) -> Self {
         env.cost_estimate().budget().reset_unlimited();
         env.ledger().with_mut(|l| {
@@ -136,6 +141,24 @@ impl<'a> LendingFixture<'a> {
         ));
         let hub_id = fixture.governance.mock_all_auths().create_hub(admin);
         let spoke_id = fixture.governance.mock_all_auths().add_spoke(admin);
+        let curve = SpokeLiquidationCurveArgs {
+            hf_for_max_bonus_wad: HF_FOR_MAX_BONUS_WAD,
+            liquidation_bonus_factor_bps: LIQUIDATION_BONUS_FACTOR_BPS,
+            spoke_id,
+            target_hf_wad: TARGET_HF_WAD,
+        };
+        fixture.execute(
+            AdminOperation::SetSpokeLiquidationCurve(curve.clone()),
+            &controller_address,
+            "set_spoke_liquidation_curve",
+            vec![
+                env,
+                curve.spoke_id.into_val(env),
+                curve.target_hf_wad.into_val(env),
+                curve.hf_for_max_bonus_wad.into_val(env),
+                curve.liquidation_bonus_factor_bps.into_val(env),
+            ],
+        );
         fixture.execute(
             AdminOperation::Unpause,
             &controller_address,

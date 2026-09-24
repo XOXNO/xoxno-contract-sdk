@@ -113,3 +113,27 @@ fn a_flash_loan_from_a_stranger_is_rejected() {
     assert!(result.is_err());
     assert_eq!(s.usdc.token.balance(&s.vault.address), 10 * UNIT);
 }
+
+#[test]
+fn a_direct_call_to_the_callback_is_rejected() {
+    let s = setup();
+    s.usdc.sac.mint(&s.vault.address, &(10 * UNIT));
+    s.env.set_auths(&[]);
+
+    let result = s.vault.try_execute_flash_loan(
+        &s.owner,
+        &s.usdc.asset,
+        &(100_000 * UNIT),
+        &0,
+        &s.fixture.pool.address,
+        &Bytes::new(&s.env),
+    );
+
+    assert!(result.is_err());
+    assert_eq!(
+        s.usdc
+            .token
+            .allowance(&s.vault.address, &s.fixture.pool.address),
+        0
+    );
+}

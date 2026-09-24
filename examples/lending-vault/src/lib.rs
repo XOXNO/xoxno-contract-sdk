@@ -14,6 +14,9 @@ use xoxno_contract_sdk::lending::helpers::{
 };
 use xoxno_contract_sdk::lending::{ControllerClient, FlashLoanReceiver};
 
+const INSTANCE_TTL_THRESHOLD: u32 = 518_400;
+const INSTANCE_TTL_EXTEND_TO: u32 = 3_110_400;
+
 #[contracttype]
 #[derive(Clone)]
 pub struct Config {
@@ -78,6 +81,9 @@ impl LendingVault {
             &vec![&env, (cfg.market.clone(), amount)],
         );
         env.storage().instance().set(&Key::Account, &account_id);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
         account_id
     }
 
@@ -118,6 +124,7 @@ impl FlashLoanReceiver for LendingVault {
         _data: Bytes,
     ) {
         let cfg = config(&env);
+        cfg.pool.require_auth();
         if initiator != cfg.owner || pool != cfg.pool {
             panic_with_error!(&env, VaultError::UnexpectedFlashLoan);
         }

@@ -28,6 +28,7 @@ import tempfile
 from wasm_code_hash import code_hash
 
 REPO = "XOXNO/rs-lending-xlm"
+SIGNER_WORKFLOW = f"{REPO}/.github/workflows/release.yml"
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CRATE = ROOT / "crates" / "xoxno-contract-sdk"
 WASM_DIR = CRATE / "wasm"
@@ -52,6 +53,8 @@ def fail(message: str) -> None:
 
 def from_build_dir(build: pathlib.Path) -> tuple[dict, dict, dict]:
     """Returns (files, deploy_hashes, source) from a local checkout."""
+    if run("git", "-C", str(build), "status", "--porcelain", "--untracked-files=no").strip():
+        fail(f"{build} has modified tracked files; build from a clean checkout of a tag")
     files, deploy = {}, {}
     for name in CONTRACTS:
         files[name] = (build / "target" / "optimized" / f"{name}.wasm").read_bytes()
@@ -63,7 +66,7 @@ def from_build_dir(build: pathlib.Path) -> tuple[dict, dict, dict]:
         files[sdk_name] = (release / f"{crate_name}.wasm").read_bytes()
     commit = run("git", "-C", str(build), "rev-parse", "HEAD").strip()
     tag = run("git", "-C", str(build), "describe", "--tags", "--always").strip()
-    return files, deploy, {"tag": tag, "commit": commit}
+    return files, deploy, {"tag": tag, "commit": commit, "method": "build-dir"}
 
 
 def from_release(tag: str) -> tuple[dict, dict, dict]:
@@ -71,12 +74,12 @@ def from_release(tag: str) -> tuple[dict, dict, dict]:
     with tempfile.TemporaryDirectory() as tmp:
         run("gh", "release", "download", tag, "-R", REPO, "-D", tmp, "-p", "sdk-*")
         out = pathlib.Path(tmp)
-        run("gh", "attestation", "verify", str(out / "sdk-manifest.json"), "--repo", REPO)
+        verify_attestation(out / "sdk-manifest.json")
         manifest = json.loads((out / "sdk-manifest.json").read_text())
         files, deploy = {}, {}
         for name in CONTRACTS + list(MOCKS):
             path = out / f"sdk-{name}.wasm"
-            run("gh", "attestation", "verify", str(path), "--repo", REPO)
+            verify_attestation(path)
             files[name] = path.read_bytes()
             entry = manifest[name]
             if sha256(files[name]) != entry["sha256"]:
@@ -86,7 +89,11 @@ def from_release(tag: str) -> tuple[dict, dict, dict]:
                     fail(f"{name}: code hash differs from sdk-manifest.json")
                 deploy[name] = entry["deploy_sha256"]
     commit = run("gh", "api", f"repos/{REPO}/commits/{tag}", "--jq", ".sha").strip()
-    return files, deploy, {"tag": tag, "commit": commit}
+    return files, deploy, {"tag": tag, "commit": commit, "method": "release"}
+
+
+def verify_attestation(path: pathlib.Path) -> None:
+    run("gh", "attestation", "verify", str(path), "--repo", REPO, "--signer-workflow", SIGNER_WORKFLOW)
 
 
 def load_config(config_dir: "pathlib.Path | None", ref: str) -> dict:
@@ -128,7 +135,12 @@ def check_deployed(deploy: dict, networks: dict, allow_undeployed: bool) -> None
 def write_manifest(files: dict, deploy: dict, source: dict) -> None:
     WASM_DIR.mkdir(parents=True, exist_ok=True)
     manifest = {
-        "source": {"repository": REPO, "tag": source["tag"], "commit": source["commit"]},
+        "source": {
+            "repository": REPO,
+            "tag": source["tag"],
+            "commit": source["commit"],
+            "method": source["method"],
+        },
         "contracts": {},
         "mocks": {},
     }
@@ -165,14 +177,14 @@ def write_networks(source: dict) -> None:
             ("pool", "Liquidity pool that holds every market's cash."),
             ("position_nft", "Position NFT: the token id is the account id; its owner owns the account."),
         ]:
-            lines += [f"    /// {label}", f'    pub const {key.upper()}: &str = "{cfg[key]}";']
+            lines += [f"    /// {label}", f"    pub const {key.upper()}: &str = {json.dumps(cfg[key])};"]
         hubs = sorted(set(cfg["hub_ids"].values()))
         lines += ["    /// On-chain hub ids.", f"    pub const HUB_IDS: &[u32] = &{hubs};"]
         lines += ["    /// On-chain spoke ids with the spoke names from the deployment configuration.",
                   "    pub const SPOKES: &[(u32, &str)] = &["]
         for key, onchain in sorted(cfg["spoke_ids"].items(), key=lambda kv: kv[1]):
             name = names.get(key, {}).get("name", "")
-            lines.append(f'        ({onchain}, "{name}"),')
+            lines.append(f"        ({int(onchain)}, {json.dumps(name)}),")
         lines += ["    ];", "}", ""]
     NETWORKS_RS.write_text("\n".join(lines).rstrip() + "\n")
 
