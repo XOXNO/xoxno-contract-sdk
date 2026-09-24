@@ -557,7 +557,7 @@ those hashes with the live mainnet contracts.
 
 | xoxno-contract-sdk | soroban-sdk | rs-lending-xlm |
 |---|---|---|
-| 0.1.x, 0.2.x | 28 | v1.1.0 (`1053ae033`) |
+| 0.1.x, 0.2.x | 28 | v1.1.0 (`dc57a8562`) |
 
 0.1.0 and 0.2.0 were published before the mainnet upgrade to rs-lending-xlm
 v1.1.0.
