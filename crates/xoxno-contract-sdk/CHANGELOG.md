@@ -6,6 +6,41 @@ All notable changes to this crate are recorded here. The format follows
 means the embedded WASM, the ABI, the `soroban-sdk` major version or the
 fixture API changed.
 
+## [0.2.0] - 2026-09-24
+
+### Added
+
+- `Withdrawal { amount, account_closed }`. `account_closed` is true when the
+  withdrawal left the account empty and the protocol burned its position NFT;
+  the wrapper reads it from the NFT (`owner_of` fails with
+  `NonExistentToken`).
+
+### Fixed
+
+- `XoxnoLending::liquidate` failed with `Error(Auth, InvalidAction)` when the
+  offer was above a debt the liquidation closes in full: the controller then
+  takes the whole offer, but the wrapper had authorized only the planned
+  amount. It now offers and authorizes only the planned amount.
+- `resolve_account` docs: a repayment never deletes an account; a withdrawal
+  or a strategy call that leaves it empty does.
+
+### Changed
+
+- `XoxnoLending::withdraw` and `withdraw_all` return `Withdrawal` instead of
+  the amount.
+- `XoxnoLending::repay` returns the amount repaid. The pool refunds any amount
+  above the debt to the current contract; the return value excludes it, so a
+  contract that repays for a user can send the rest back. The README and the
+  `account-basics` example do.
+- The `account-basics` and `lending-vault` examples forget the stored account
+  id only when the withdrawal closed the account.
+- README: every example is a complete item with its own imports and typed
+  inputs; operations, reads, markets and prices are reference tables; the
+  testing section shows a contract and its fixture test. The borrow example
+  requires the stored owner's authorization before it sends borrowed tokens.
+- `scripts/check_readme.py` compiles every README example and runs its tests;
+  CI runs it.
+
 ## [0.1.0] - 2026-09-24
 
 ### Added

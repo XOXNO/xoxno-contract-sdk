@@ -116,7 +116,9 @@ fn partial_withdraw_and_debt_views() {
         assert_eq!(l.debt(account, &s.xlm.key), 10_000 * UNIT);
         assert_eq!(l.debt_usd(account), 1_000 * WAD);
         assert_eq!(l.collateral_usd(account), 10_000 * WAD);
-        assert_eq!(l.withdraw(account, &s.usdc.key, 1_000 * UNIT), 1_000 * UNIT);
+        let withdrawal = l.withdraw(account, &s.usdc.key, 1_000 * UNIT);
+        assert_eq!(withdrawal.amount, 1_000 * UNIT);
+        assert!(!withdrawal.account_closed);
         assert_eq!(l.collateral(account, &s.usdc.key), 9_000 * UNIT);
     });
     assert_eq!(s.usdc.token.balance(&s.integrator), 1_000 * UNIT);
@@ -167,10 +169,30 @@ fn repay_authorizes_the_transfer_it_pays() {
 
     as_integrator(&s, |l| {
         l.borrow(account, &s.xlm.key, 10_000 * UNIT);
-        l.repay(account, &s.xlm.key, 4_000 * UNIT);
+        assert_eq!(l.repay(account, &s.xlm.key, 4_000 * UNIT), 4_000 * UNIT);
         assert_eq!(l.debt(account, &s.xlm.key), 6_000 * UNIT);
     });
     assert_eq!(s.xlm.token.balance(&s.integrator), 6_000 * UNIT);
+}
+
+#[test]
+fn repay_above_the_debt_returns_the_amount_repaid_and_keeps_the_refund() {
+    let s = setup();
+    let account = as_integrator(&s, |l| {
+        l.open_account(s.fixture.spoke_id, &s.usdc.key, 10_000 * UNIT)
+    });
+    s.xlm
+        .sac
+        .mock_all_auths()
+        .mint(&s.integrator, &(5_000 * UNIT));
+
+    as_integrator(&s, |l| {
+        l.borrow(account, &s.xlm.key, 10_000 * UNIT);
+        let debt = l.debt(account, &s.xlm.key);
+        assert_eq!(l.repay(account, &s.xlm.key, 15_000 * UNIT), debt);
+        assert_eq!(l.debt(account, &s.xlm.key), 0);
+    });
+    assert_eq!(s.xlm.token.balance(&s.integrator), 5_000 * UNIT);
 }
 
 #[test]
@@ -203,5 +225,85 @@ fn liquidate_authorizes_exactly_what_the_plan_pulls() {
 
     assert!(paid > 0 && paid < 200_000 * UNIT);
     assert_eq!(s.xlm.token.balance(&s.integrator), 200_000 * UNIT - paid);
+    assert!(s.usdc.token.balance(&s.integrator) > 0);
+}
+
+#[test]
+fn withdraw_all_reports_the_closed_account_and_its_burned_nft() {
+    let s = setup();
+    let account = as_integrator(&s, |l| {
+        l.open_account(s.fixture.spoke_id, &s.usdc.key, 1_000 * UNIT)
+    });
+
+    let withdrawal = as_integrator(&s, |l| l.withdraw_all(account, &s.usdc.key));
+
+    assert!(1_000 * UNIT - withdrawal.amount <= 1);
+    assert!(withdrawal.account_closed);
+    assert!(!s.fixture.controller.account_exists(&account));
+    assert!(s
+        .fixture
+        .position_nft
+        .try_owner_of(&(account as u32))
+        .is_err());
+}
+
+#[test]
+fn withdraw_all_with_another_supply_keeps_the_account() {
+    let s = setup();
+    let account = as_integrator(&s, |l| {
+        l.open_account(s.fixture.spoke_id, &s.usdc.key, 1_000 * UNIT)
+    });
+    s.xlm
+        .sac
+        .mock_all_auths()
+        .mint(&s.integrator, &(1_000 * UNIT));
+
+    let withdrawal = as_integrator(&s, |l| {
+        l.deposit(account, s.fixture.spoke_id, &s.xlm.key, 1_000 * UNIT);
+        l.withdraw_all(account, &s.usdc.key)
+    });
+
+    assert!(!withdrawal.account_closed);
+    assert!(s.fixture.controller.account_exists(&account));
+    assert_eq!(
+        s.fixture.position_nft.owner_of(&(account as u32)),
+        s.integrator
+    );
+}
+
+#[test]
+fn liquidate_with_an_offer_above_the_whole_debt_pays_only_the_debt() {
+    let s = setup();
+    let borrower = Address::generate(&s.env);
+    s.usdc
+        .sac
+        .mock_all_auths()
+        .mint(&borrower, &(10_000 * UNIT));
+    let victim = s.fixture.controller.mock_all_auths().supply(
+        &borrower,
+        &0,
+        &s.fixture.spoke_id,
+        &vec![&s.env, (s.usdc.key.clone(), 10_000 * UNIT)],
+    );
+    s.fixture.controller.mock_all_auths().borrow(
+        &borrower,
+        &victim,
+        &vec![&s.env, (s.xlm.key.clone(), 70_000 * UNIT)],
+        &None,
+    );
+    s.fixture.set_price(&s.xlm, WAD * 14 / 100);
+    s.xlm
+        .sac
+        .mock_all_auths()
+        .mint(&s.integrator, &(100_000 * UNIT));
+
+    let paid = as_integrator(&s, |l| l.liquidate(victim, &s.xlm.key, 100_000 * UNIT));
+
+    assert!((70_000 * UNIT..100_000 * UNIT).contains(&paid));
+    assert_eq!(s.xlm.token.balance(&s.integrator), 100_000 * UNIT - paid);
+    assert_eq!(
+        s.fixture.controller.get_borrow_amount(&victim, &s.xlm.key),
+        0
+    );
     assert!(s.usdc.token.balance(&s.integrator) > 0);
 }

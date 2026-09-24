@@ -1,266 +1,503 @@
 # xoxno-contract-sdk
 
-Build Soroban contracts on top of [XOXNO Lending].
+Call [XOXNO Lending] from a Soroban contract, and test that contract against a
+local deployment of the protocol.
 
-The crate has two layers:
-
-- **`XoxnoLending`**, a wrapper for the calling contract. It opens and reuses
-  accounts, supplies, borrows, repays, withdraws, liquidates, reads positions,
-  markets and prices. It creates the token authorizations the protocol needs,
-  and it returns token amounts, not raw shares.
-- **Generated clients** for the controller, pool, position NFT and price
-  aggregator, for anything the wrapper does not cover. They hold only the
-  functions a builder calls, and their signatures come from the WASM of an
-  attested XOXNO Lending release.
-
-It also has callback traits for flash loans, constants, the mainnet and testnet
-addresses, and a `testutils` fixture that deploys the whole protocol into a
-test `Env`.
+- `XoxnoLending` calls the protocol as the current contract. It creates the
+  token authorizations each call needs and returns token amounts.
+- Generated clients for the controller, pool, position NFT and price
+  aggregator cover the calls the wrapper does not.
+- Flash-loan callback traits, unit constants, and the mainnet and testnet
+  addresses.
+- `testutils::LendingFixture` deploys the protocol into a test `Env`.
 
 ## Install
 
 ```toml
 [dependencies]
-xoxno-contract-sdk = "0.1"
+soroban-sdk = "28"
+xoxno-contract-sdk = "0.2"
 
 [dev-dependencies]
-xoxno-contract-sdk = { version = "0.1", features = ["testutils"] }
+soroban-sdk = { version = "28", features = ["testutils"] }
+xoxno-contract-sdk = { version = "0.2", features = ["testutils"] }
 ```
 
-The crate is `no_std` and uses `soroban-sdk` 28. Build your contract with
-`stellar contract build` (stellar-cli 25.2 or newer), as `soroban-sdk` 28
-requires.
+Build contracts with `stellar contract build` (stellar-cli 25.2 or later). The
+crate is `no_std`.
 
-## Deposit in one call
+## Model
 
-The caller passes the token, hub, spoke and account; nothing is stored in your
-contract. `account_id` 0 opens a new account and returns its id, which is the
-position NFT's token id. Pass the id back to add to the same account.
+| Term | Meaning |
+|---|---|
+| Hub | An isolated group of markets. A token can be listed in several hubs. |
+| Market | One token in one hub: `HubAssetKey { asset, hub_id }`. `lending.market(hub_id, &token)` builds it. |
+| Spoke | A risk profile. It lists the markets an account can use, each with its LTV, liquidation threshold and caps. An account stays in the spoke it opens in. |
+| Account | A `u64` id. Opening an account mints a position NFT with the same token id; the NFT owner owns the account. |
 
-```rust,ignore
-pub fn deposit(env: Env, from: Address, token: Address, hub_id: u32,
-               spoke_id: u32, account_id: u64, amount: i128) -> u64 {
-    from.require_auth();
-    token::Client::new(&env, &token).transfer(&from, env.current_contract_address(), &amount);
+`XoxnoLending` acts as the current contract. The contract is the caller, pays
+and receives the tokens, and owns the accounts it opens. Build it with
+`XoxnoLending::mainnet(&env)`, `XoxnoLending::testnet(&env)`, or
+`XoxnoLending::new(&env, &addresses)` for a `LendingAddresses` value.
 
-    let lending = XoxnoLending::mainnet(&env);
-    let market = lending.market(hub_id, &token);
-    lending.deposit(account_id, spoke_id, &market, amount)
+Hub and spoke ids are in `networks::mainnet` and `networks::testnet`.
+
+## Deposit
+
+```rust
+use soroban_sdk::{contract, contractimpl, token, Address, Env};
+use xoxno_contract_sdk::XoxnoLending;
+
+#[contract]
+pub struct Vault;
+
+#[contractimpl]
+impl Vault {
+    /// Moves `amount` of `token` from `from` into market (`hub_id`, `token`).
+    /// `account_id` 0 opens an account in `spoke_id`. Returns the account id.
+    pub fn deposit(
+        env: Env,
+        from: Address,
+        token: Address,
+        hub_id: u32,
+        spoke_id: u32,
+        account_id: u64,
+        amount: i128,
+    ) -> u64 {
+        from.require_auth();
+        token::Client::new(&env, &token).transfer(&from, env.current_contract_address(), &amount);
+
+        let lending = XoxnoLending::mainnet(&env);
+        let market = lending.market(hub_id, &token);
+        lending.deposit(account_id, spoke_id, &market, amount)
+    }
 }
 ```
 
-`lending.deposit` creates the token authorization the protocol needs. The
-`simple-deposit` example is this function with tests.
+The call fails with `SpokeError::AssetNotInSpoke` when the spoke does not list
+the market, and with `SpokeError::SpokeMismatch` when `spoke_id` is not the
+spoke of an existing account.
 
-## Accounts
+## Keep one account
 
-An account is a position NFT. The first supply opens it: the controller mints
-the NFT to your contract and returns its token id, which is the account id.
-Store the id and pass it to every later call.
+A contract that holds a single account stores its id. The protocol deletes an
+account, and burns its NFT, when a withdrawal or a strategy call leaves it with
+no supply and no debt. A repayment never deletes an account. `withdraw` and `withdraw_all` report this in `Withdrawal::account_closed`,
+which the wrapper reads from the position NFT: the NFT no longer exists.
+`resolve_account` returns the stored id if the account still exists, and 0
+otherwise, so the next deposit opens a new account.
 
-```rust,ignore
-use xoxno_contract_sdk::lending::constants::NEW_ACCOUNT;
-use xoxno_contract_sdk::{LendingAddresses, XoxnoLending};
+```rust
+use soroban_sdk::{contracttype, Env};
+use xoxno_contract_sdk::lending::controller::HubAssetKey;
+use xoxno_contract_sdk::{Withdrawal, XoxnoLending};
 
-let lending = XoxnoLending::new(&env, &addresses); // or XoxnoLending::mainnet(&env)
+#[contracttype]
+pub enum DataKey {
+    Account,
+}
 
-// First supply, or reuse the stored account.
-let stored: Option<u64> = env.storage().instance().get(&Key::Account);
-let account_id = match lending.resolve_account(stored) {
-    NEW_ACCOUNT => lending.open_account(spoke_id, &market, amount),
-    account_id => lending.supply(account_id, &market, amount),
-};
-env.storage().instance().set(&Key::Account, &account_id);
+/// Supplies `amount` of `market` from the current contract's balance to its
+/// account, and returns the account id.
+pub fn supply(env: &Env, spoke_id: u32, market: &HubAssetKey, amount: i128) -> u64 {
+    let lending = XoxnoLending::mainnet(env);
+    let stored = env.storage().instance().get(&DataKey::Account);
+    let account_id = lending.deposit(lending.resolve_account(stored), spoke_id, market, amount);
+    env.storage().instance().set(&DataKey::Account, &account_id);
+    account_id
+}
 
-lending.borrow(account_id, &debt_market, borrow_amount);   // tokens come to your contract
-lending.repay(account_id, &debt_market, repay_amount);     // paid from your contract
-let withdrawn = lending.withdraw_all(account_id, &market);
-let position = lending.position(account_id);               // amounts per market, interest included
-let health = lending.health_factor(account_id);            // WAD; i128::MAX without debt
+/// Withdraws the whole supply of `market` to the current contract. Forgets the
+/// account id when the withdrawal closed the account and burned its NFT.
+pub fn withdraw_all(env: &Env, account_id: u64, market: &HubAssetKey) -> Withdrawal {
+    let withdrawal = XoxnoLending::mainnet(env).withdraw_all(account_id, market);
+    if withdrawal.account_closed {
+        env.storage().instance().remove(&DataKey::Account);
+    }
+    withdrawal
+}
 ```
 
-Your contract is always the caller, payer and receiver, and it owns the NFT.
-`resolve_account` matters: a full withdrawal or repayment that leaves an
-account empty deletes it and burns the NFT, and the next supply must open a new
-account.
+## Operations
 
-Other account reads: `owns`, `owner_of`, `account_count`, `accounts_of`,
-`account_spoke`, `collateral`, `debt`, `collateral_usd`, `debt_usd`,
-`borrowable_usd`, `is_liquidatable`. `renew_account` extends the account's TTL.
+Amounts are token base units. "Contract" is the current contract.
 
-## Markets: hubs and spokes
+| Method | Tokens | Returns |
+|---|---|---|
+| `deposit(account_id, spoke_id, &market, amount)` | contract → protocol | Account id. Opens an account when `account_id` is 0. |
+| `open_account(spoke_id, &market, amount)` | contract → protocol | New account id |
+| `supply(account_id, &market, amount)` | contract → protocol | Account id |
+| `borrow(account_id, &market, amount)` | protocol → contract | |
+| `repay(account_id, &market, amount)` | contract → protocol | Amount repaid. The pool refunds any amount above the debt to the contract. |
+| `withdraw(account_id, &market, amount)` | protocol → contract | `Withdrawal { amount, account_closed }`. `account_closed`: the account was deleted and its NFT burned. |
+| `withdraw_all(account_id, &market)` | protocol → contract | `Withdrawal`, as `withdraw` |
+| `liquidate(account_id, &market, amount)` | contract → protocol, seized collateral → contract | Amount paid |
+| `flash_loan(&market, amount, &receiver, &data)` | protocol → receiver → protocol | |
+| `renew_account(account_id)` | | Extends the TTL of the account, its positions and its NFT. |
 
-A market is a token in a hub: `HubAssetKey { asset, hub_id }`. The same token
-can be listed in several hubs, and each hub market is isolated. A spoke is a
-risk profile; an account opens in one spoke and keeps it. A spoke lists some
-markets, each with its own LTV, liquidation threshold and caps.
+The wrapper spends the contract's tokens and borrows against the contract's
+accounts. A public entrypoint that calls it must check who may start that
+action, with an address the contract stored, not one the caller passes.
 
-```rust,ignore
+Borrow for the owner, and repay with a payer's tokens:
+
+```rust
+use soroban_sdk::{contracttype, token, Address, Env};
+use xoxno_contract_sdk::lending::controller::HubAssetKey;
+use xoxno_contract_sdk::XoxnoLending;
+
+#[contracttype]
+pub enum DataKey {
+    Owner,
+}
+
+/// Borrows `amount` of `market` against the contract's account and sends it to
+/// the owner the contract stored at construction.
+pub fn borrow_to_owner(env: &Env, account_id: u64, market: &HubAssetKey, amount: i128) {
+    let owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
+    owner.require_auth();
+    XoxnoLending::mainnet(env).borrow(account_id, market, amount);
+    token::Client::new(env, &market.asset).transfer(&env.current_contract_address(), &owner, &amount);
+}
+
+/// Repays up to `amount` of the account's debt in `market` with tokens from
+/// `from`, sends the part above the debt back, and returns the amount repaid.
+pub fn repay_from(env: &Env, account_id: u64, market: &HubAssetKey, amount: i128, from: &Address) -> i128 {
+    from.require_auth();
+    let this = env.current_contract_address();
+    let token = token::Client::new(env, &market.asset);
+    token.transfer(from, &this, &amount);
+    let repaid = XoxnoLending::mainnet(env).repay(account_id, market, amount);
+    if repaid < amount {
+        token.transfer(&this, from, &(amount - repaid));
+    }
+    repaid
+}
+```
+
+## Account reads
+
+| Method | Returns |
+|---|---|
+| `position(account_id)` | `Position { collateral, debt }`: `(HubAssetKey, amount)` per market, interest included |
+| `collateral(account_id, &market)` | Supplied amount, interest included, rounded half-up |
+| `debt(account_id, &market)` | Borrowed amount, interest included |
+| `health_factor(account_id)` | WAD. `i128::MAX` without debt. Below `WAD`, the account can be liquidated. |
+| `is_liquidatable(account_id)` | `bool` |
+| `collateral_usd(account_id)`, `debt_usd(account_id)`, `borrowable_usd(account_id)` | USD, WAD |
+| `account_exists(account_id)`, `owns(account_id)`, `owner_of(account_id)`, `account_spoke(account_id)` | Existence, ownership by the contract, owner, spoke |
+| `account_count(&owner)`, `accounts_of(&owner, start, limit)` | Accounts held by `owner` |
+
+`withdraw_all` pays the floored claim, so its `amount` can be 1 unit less than
+`collateral`.
+
+## Choose a market
+
+```rust
+use soroban_sdk::{Address, Env};
+use xoxno_contract_sdk::lending::controller::HubAssetKey;
 use xoxno_contract_sdk::networks::mainnet;
+use xoxno_contract_sdk::XoxnoLending;
 
-let market = lending.find_market(&token, mainnet::HUB_IDS).unwrap(); // first hub that lists it
-let spoke = mainnet::SPOKES.iter().map(|(id, _name)| *id)
-    .find(|spoke| lending.can_supply(*spoke, &market)).unwrap();
-let config = lending.spoke_asset(spoke, &market).unwrap();          // LTV, threshold, caps, flags
-let rate = lending.supply_rate(&market);                            // RAY
+/// The first mainnet hub that lists `token`, and the first spoke that accepts
+/// a new supply of it.
+pub fn placement(env: &Env, token: &Address) -> Option<(u32, HubAssetKey)> {
+    let lending = XoxnoLending::mainnet(env);
+    let market = lending.find_market(token, mainnet::HUB_IDS)?;
+    let spoke_id = mainnet::SPOKES
+        .iter()
+        .map(|(spoke_id, _name)| *spoke_id)
+        .find(|spoke_id| lending.can_supply(*spoke_id, &market))?;
+    Some((spoke_id, market))
+}
 ```
 
-`can_supply` and `can_borrow` check the listing flags. The controller checks
-caps and the account's state when you act.
+| Method | Returns |
+|---|---|
+| `is_listed(&market)` | Whether a hub lists the token |
+| `can_supply(spoke_id, &market)`, `can_borrow(spoke_id, &market)` | Whether the listing flags allow a new supply or borrow. The controller checks caps and the account when you act. |
+| `spoke(spoke_id)` | `Option<SpokeConfig>` |
+| `spoke_asset(spoke_id, &market)` | `Option<SpokeAssetConfig>`: LTV, liquidation threshold, caps, flags |
+| `supply_rate(&market)`, `borrow_rate(&market)` | Annual rate, RAY |
+| `utilization(&market)`, `supply_index(&market)` | RAY |
+| `liquidity(&market)` | Cash available to borrow, token base units |
 
 ## Prices
 
-```rust,ignore
-let price = lending.price(&token);                 // USD, WAD; panics if the price is not usable
-let maybe = lending.try_price(&token);             // None if stale, deviating or not configured
-let status = lending.quote(&token);                // validity, staleness, deviation, both sources
-let value = lending.value_usd(&token, amount);     // USD, WAD
-```
+```rust
+use soroban_sdk::{token, Address, Env};
+use xoxno_contract_sdk::XoxnoLending;
 
-Use `price` when your contract acts on the price, so it stops on a bad price.
-Use `try_price` or `quote` when it can decide what to do without one.
-
-## Liquidation
-
-```rust,ignore
-if lending.is_liquidatable(account_id) {
-    let estimate = lending.liquidation_estimate(account_id, &debt_market, offer);
-    let paid = lending.liquidate(account_id, &debt_market, offer); // seized collateral comes to your contract
+/// How many base units of `asset` the account can still borrow, rounded down.
+pub fn max_borrow(env: &Env, account_id: u64, asset: &Address) -> i128 {
+    let lending = XoxnoLending::mainnet(env);
+    let headroom_usd = lending.borrowable_usd(account_id);
+    let price = lending.price(asset);
+    let unit = 10i128.pow(token::Client::new(env, asset).decimals());
+    headroom_usd.checked_mul(unit).map_or(i128::MAX, |scaled| scaled / price)
 }
 ```
 
-The controller can use less than the offer. `liquidate` reads the same plan
-first, so it authorizes exactly the amount the controller pulls.
+| Method | Returns |
+|---|---|
+| `price(&asset)` | USD per whole token, WAD. Panics when the price is stale, deviates between sources, or is not configured. |
+| `try_price(&asset)` | `Option<i128>`: `None` where `price` panics |
+| `quote(&asset)` | `PriceStatus`: validity, staleness, deviation, final price and error code |
+| `value_usd(&asset, amount)` | USD value of `amount` base units, WAD |
+
+Use `price` when the contract acts on the price, so the call stops on a bad
+price. Use `try_price` or `quote` when the contract has a fallback.
+
+## Liquidate
+
+```rust
+use soroban_sdk::Env;
+use xoxno_contract_sdk::lending::controller::HubAssetKey;
+use xoxno_contract_sdk::XoxnoLending;
+
+/// Repays up to `max_repay` of the account's debt in `debt_market` from the
+/// contract's balance. Returns the amount paid, or 0 if the account is healthy.
+pub fn liquidate(env: &Env, account_id: u64, debt_market: &HubAssetKey, max_repay: i128) -> i128 {
+    let lending = XoxnoLending::mainnet(env);
+    if !lending.is_liquidatable(account_id) {
+        return 0;
+    }
+    lending.liquidate(account_id, debt_market, max_repay)
+}
+```
+
+The controller can use less than `max_repay`. `liquidate` reads the plan first
+(`liquidation_estimate`), then offers and authorizes only the planned amount.
+The rest stays in the contract, and the seized collateral goes to it.
 
 ## Flash loans
 
-A flash-loan receiver implements `FlashLoanReceiver` and repays by approving
-the pool:
+The contract that starts the loan calls
+`lending.flash_loan(&market, amount, &receiver, &data)`. The receiver is a
+different contract that implements `FlashLoanReceiver`:
 
-```rust,ignore
+```rust
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Bytes, Env};
+use xoxno_contract_sdk::lending::helpers::approve_flash_repayment;
+use xoxno_contract_sdk::lending::FlashLoanReceiver;
+use xoxno_contract_sdk::LendingAddresses;
+
+#[contracttype]
+pub enum DataKey {
+    Owner,
+}
+
+#[contract]
+pub struct Receiver;
+
 #[contractimpl]
-impl FlashLoanReceiver for MyContract {
-    fn execute_flash_loan(env: Env, initiator: Address, asset: Address, amount: i128,
-                          fee: i128, pool: Address, data: Bytes) {
-        let cfg = config(&env);
-        cfg.lending.pool.require_auth();                  // only the pool can call this
-        if initiator != cfg.owner || pool != cfg.lending.pool { panic!() }
-        // ... use the funds ...
+impl Receiver {
+    /// `owner` is the only account that can start a loan to this contract.
+    pub fn __constructor(env: Env, owner: Address) {
+        env.storage().instance().set(&DataKey::Owner, &owner);
+    }
+}
+
+#[contractimpl]
+impl FlashLoanReceiver for Receiver {
+    fn execute_flash_loan(
+        env: Env,
+        initiator: Address,
+        asset: Address,
+        amount: i128,
+        fee: i128,
+        pool: Address,
+        _data: Bytes,
+    ) {
+        let expected_pool = LendingAddresses::mainnet(&env).pool;
+        expected_pool.require_auth();
+        let owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
+        assert!(pool == expected_pool && initiator == owner, "unexpected flash loan");
+
+        // Use `amount` of `asset` here.
         approve_flash_repayment(&env, &asset, &pool, amount + fee);
     }
 }
 ```
 
-- Anyone can call a receiver directly with forged arguments. Call
-  `require_auth()` on the stored pool address first; it passes only when the
-  pool is the caller.
-- The receiver cannot be the contract that starts the loan, and the callback
-  cannot call the controller or the pool: Soroban rejects a call into a
-  contract that is already on the call stack. Start the loan from an account
-  or another contract (`XoxnoLending::flash_loan`).
+- Anyone can call `execute_flash_loan` with forged arguments.
+  `require_auth()` on the pool address passes only when the pool is the
+  caller. Check it before you trust `initiator`.
+- Repay with `approve_flash_repayment`. The pool takes `amount + fee` after
+  the callback returns.
+- The receiver cannot start its own loan, and the callback cannot call the
+  controller or the pool: Soroban rejects a call into a contract that is
+  already on the call stack.
 
-`FlashPositionReceiver` is the same for flash positions; see its docs.
+`FlashPositionReceiver` is the callback for `flash_position`; see its rustdoc.
 
 ## Generated clients
 
 `lending.controller()`, `lending.pool()`, `lending.position_nft()` and
 `lending.price_aggregator()` return the generated clients. The modules
-`lending::{controller, pool, position_nft, price_aggregator}` hold every type
-and error of each contract. Each module has its own copy of the shared types:
-use `lending::controller` types when you call the controller.
+`lending::{controller, pool, position_nft, price_aggregator}` hold each
+contract's types and errors. Each module has its own copy of the shared types:
+use the `lending::controller` types with the controller.
 
-## Rules to know
+A generated client does not create token authorizations. Before a controller
+call that takes tokens from the contract, call
+`lending::helpers::authorize_transfer_as_current` for that transfer.
+Delegation, `multiply`, `swap_*` and `flash_position` are on the controller
+client. Strategy calls need swap route bytes from the XOXNO quote service.
 
-- **Units.** Token amounts and caps are token base units. USD values, prices
-  and the health factor are WAD (1e18). Shares, indexes and rates are RAY
-  (1e27). Risk parameters and fees are BPS (10,000 = 100%).
-- **Rounding.** `collateral` rounds half-up. A full withdrawal pays the floored
-  claim, which can be 1 unit less.
-- **Delegates and strategies.** Delegation, `multiply`, `swap_*` and
-  `flash_position` are on the generated controller client. Strategy calls need
-  swap route bytes from the XOXNO quote service.
+## Units
+
+| Unit | Scale | Used for |
+|---|---|---|
+| Token base units | Token decimals | Amounts, caps |
+| WAD | 10^18 | USD values, prices, health factor |
+| RAY | 10^27 | Rates, indexes, utilization |
+| BPS | 10,000 = 100% | LTV, liquidation threshold, fees, bonuses |
+
+The constants are in `lending::constants`.
 
 ## Test with `LendingFixture`
 
-```rust,ignore
-let env = Env::default();
-env.mock_all_auths();
-let fixture = LendingFixture::deploy(&env, &Address::generate(&env));
-let usdc = fixture.create_market(&MarketConfig::usdc());
-let xlm = fixture.create_market(&MarketConfig::xlm());
-let my_contract = env.register(MyContract, (fixture.addresses(), fixture.spoke_id, usdc.key.clone()));
+A contract that runs against the fixture takes the protocol addresses as a
+constructor argument instead of calling `XoxnoLending::mainnet`. Deploy it
+with `LendingAddresses::mainnet(&env)` on mainnet and `fixture.addresses()` in
+tests.
 
-fixture.set_price(&xlm, WAD * 12 / 100);  // move a price
-fixture.advance_time(30 * 86_400);        // move time and accrue interest
+```rust,ignore
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env};
+use xoxno_contract_sdk::{LendingAddresses, XoxnoLending};
+
+#[contracttype]
+pub enum DataKey {
+    Lending,
+}
+
+#[contract]
+pub struct Vault;
+
+#[contractimpl]
+impl Vault {
+    pub fn __constructor(env: Env, lending: LendingAddresses) {
+        env.storage().instance().set(&DataKey::Lending, &lending);
+    }
+
+    pub fn deposit(
+        env: Env,
+        from: Address,
+        token: Address,
+        hub_id: u32,
+        spoke_id: u32,
+        account_id: u64,
+        amount: i128,
+    ) -> u64 {
+        from.require_auth();
+        token::Client::new(&env, &token).transfer(&from, env.current_contract_address(), &amount);
+
+        let addresses: LendingAddresses = env.storage().instance().get(&DataKey::Lending).unwrap();
+        let lending = XoxnoLending::new(&env, &addresses);
+        let market = lending.market(hub_id, &token);
+        lending.deposit(account_id, spoke_id, &market, amount)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::{Vault, VaultClient};
+    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::{Address, Env};
+    use xoxno_contract_sdk::lending::constants::NEW_ACCOUNT;
+    use xoxno_contract_sdk::testutils::{LendingFixture, MarketConfig};
+
+    const UNIT: i128 = 10_000_000;
+
+    #[test]
+    fn first_deposit_opens_an_account() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let fixture = LendingFixture::deploy(&env, &Address::generate(&env));
+        let usdc = fixture.create_market(&MarketConfig::usdc());
+        let vault = VaultClient::new(&env, &env.register(Vault, (fixture.addresses(),)));
+        let user = Address::generate(&env);
+        usdc.sac.mint(&user, &(1_000 * UNIT));
+
+        let account_id = vault.deposit(
+            &user,
+            &usdc.asset,
+            &fixture.hub_id,
+            &fixture.spoke_id,
+            &NEW_ACCOUNT,
+            &(1_000 * UNIT),
+        );
+
+        assert_eq!(fixture.position_nft.owner_of(&(account_id as u32)), vault.address);
+        assert_eq!(fixture.controller.get_collateral_amount(&account_id, &usdc.key), 1_000 * UNIT);
+    }
+}
 ```
 
-- `deploy` deploys governance, the controller, the pool, the position NFT, the
-  price aggregator and two mock oracles, with one hub and one spoke. Governance
-  owns the controller, as on mainnet, and every configuration step goes
-  through the governance timelock.
-- `create_market` lists a new 7-decimal token with a dual-source oracle and
-  supplies initial liquidity. `MarketConfig::usdc()` and `MarketConfig::xlm()`
-  use the mainnet market parameters and "Blue Chip" asset settings.
-- `add_hub`, `add_spoke`, `create_market_in`, `list_market`,
-  `add_market_to_hub` and `supply_liquidity` build more hubs, spokes and
-  listings.
-- `fixture.addresses()` gives the `LendingAddresses` your contract needs.
+`LendingFixture::deploy` deploys governance, the controller, the pool, the
+position NFT, the price aggregator and two mock oracles, with one hub
+(`fixture.hub_id`) and one spoke (`fixture.spoke_id`). Governance owns the
+controller, and every configuration step goes through the governance
+timelock, as on mainnet.
 
-It changes the `Env`:
+| Method | Effect |
+|---|---|
+| `create_market(&MarketConfig::usdc())` | Lists a new 7-decimal token with a dual-source oracle and initial liquidity. `MarketConfig::usdc()` and `MarketConfig::xlm()` use the mainnet parameters. Returns a `Market`: `asset`, `key`, `token`, `sac`. |
+| `create_market_in(&config, hub_id, spoke_id)` | The same, in another hub and spoke |
+| `add_hub()`, `add_spoke()` | New hub or spoke id |
+| `add_market_to_hub`, `list_market`, `supply_liquidity` | Build other listings |
+| `set_price(&market, price_wad)` | Moves both oracle prices |
+| `advance_time(seconds)` | Moves the ledger and accrues interest |
 
-- It raises the timestamp to at least 1,000,000 and the sequence to at least
-  100.
-- It raises the minimum persistent entry TTL to 10,000,000 ledgers, and the
-  maximum entry TTL above it.
-- It sets the budget to unlimited. To check one call against the network
-  limits, call `env.cost_estimate().budget().reset_default()` just before it.
+The fixture changes the `Env`:
 
-It authorizes its own admin calls per call and does not change the auth mode of
-the `Env`.
+- timestamp at least 1,000,000 and ledger sequence at least 100;
+- minimum persistent entry TTL 10,000,000 ledgers;
+- unlimited budget. To check one call against the network limits, call
+  `env.cost_estimate().budget().reset_default()` just before it.
+
+The fixture authorizes its own admin calls and does not change the auth mode
+of the `Env`. `env.mock_all_auths()` also accepts wrong authorization entries;
+leave it off to test the contract's own authorization.
 
 ## Examples
 
-Each example in the repository is a contract with tests on `LendingFixture`:
+Each example in the repository is a contract with tests on `LendingFixture`.
 
 | Example | Shows |
 |---|---|
-| `simple-deposit` | The smallest deposit: token, hub, spoke and account as parameters |
-| `account-basics` | First supply returns the NFT id; reuse it; borrow, repay, withdraw; reopen after the account closes |
-| `market-picker` | Find the hub that lists a token and a spoke that accepts it; read rates and utilization |
-| `price-reader` | Strict and tolerant prices, USD values, borrow headroom in tokens |
-| `liquidator` | A contract liquidator that pays exactly what the plan uses |
+| `simple-deposit` | Deposit with the token, hub, spoke and account as parameters |
+| `account-basics` | One stored account: deposit, borrow, repay, withdraw, reopen after it closes |
+| `market-picker` | Find the hub and spoke for a token; read rates and utilization |
+| `price-reader` | Strict and fallible prices, USD values, borrow headroom in tokens |
+| `liquidator` | A liquidator contract that pays exactly what the plan uses |
 | `lending-vault` | A vault on one account, with a flash-loan receiver |
 
 ## Networks
 
-`xoxno_contract_sdk::networks::{mainnet, testnet}` hold the governance,
-controller, pool and position NFT addresses, the hub ids, and the spoke ids with
-their names. `LendingAddresses::mainnet(&env)` and `::testnet(&env)` build from
-them. The price aggregator can change: the wrapper reads it from the controller.
+`networks::mainnet` and `networks::testnet` hold the governance, controller,
+pool and position NFT addresses, the hub ids, and the spoke ids with their
+names. Governance can replace the price aggregator, so the wrapper reads its
+address from the controller.
 
 ## WASM and compatibility
 
-`wasm/MANIFEST.json` records, for each contract:
+`wasm/MANIFEST.json` records, for each contract, the source release and
+commit, the SHA-256 of the embedded file, its code hash without custom
+sections, and the SHA-256 of the deploy artifact in `wasm/deploy/`.
 
-- the source repository, tag and commit;
-- the SHA-256 of the embedded file, which keeps its contract spec docs;
-- the hash of its code without custom sections;
-- the SHA-256 of the deploy artifact, embedded in `wasm/deploy/`.
-
-The generated types and clients come from the files with docs, so they have
-rustdoc and typed errors. Each module's `WASM` constant, and so the fixture,
-uses the deploy artifact: the bytes that are deployed on mainnet, so its
-SHA-256 is the on-chain WASM hash. Both files have the same code.
-
-The WASM comes from the attested build of an rs-lending-xlm GitHub release
-(`"method": "release"`). `scripts/check_mainnet.py` compares the deploy
-artifact hashes with the live mainnet contracts.
+The generated types come from the files with contract spec docs. Each module's
+`WASM` constant, and so the fixture, is the deploy artifact byte for byte, so
+its SHA-256 is the on-chain WASM hash. `scripts/check_mainnet.py` compares
+those hashes with the live mainnet contracts.
 
 | xoxno-contract-sdk | soroban-sdk | rs-lending-xlm |
 |---|---|---|
-| 0.1.x | 28 | v1.1.0 (`1053ae033`) |
+| 0.1.x, 0.2.x | 28 | v1.1.0 (`1053ae033`) |
 
-0.1.0 was published before the mainnet upgrade to rs-lending-xlm v1.1.0.
+0.1.0 and 0.2.0 were published before the mainnet upgrade to rs-lending-xlm
+v1.1.0.
 
 ## License
 

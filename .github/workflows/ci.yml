@@ -46,6 +46,9 @@ jobs:
       - name: Tests
         run: cargo test --workspace --all-features
 
+      - name: README examples compile and their tests pass
+        run: python3 scripts/check_readme.py
+
       - name: Docs
         run: cargo doc --no-deps --all-features -p xoxno-contract-sdk
         env:
