@@ -6,6 +6,10 @@ on:
       version:
         description: "Version to publish; must equal the version in crates/xoxno-contract-sdk/Cargo.toml"
         required: true
+      allow_undeployed:
+        description: "Publish WASM that mainnet does not run yet; the mainnet check only reports"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -51,7 +55,9 @@ jobs:
         run: bash .github/scripts/install-stellar-cli.sh
 
       - name: The embedded contracts are the code deployed on mainnet
-        run: python3 scripts/check_mainnet.py
+        env:
+          ALLOW_UNDEPLOYED: ${{ inputs.allow_undeployed }}
+        run: python3 scripts/check_mainnet.py || [ "$ALLOW_UNDEPLOYED" = true ]
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings

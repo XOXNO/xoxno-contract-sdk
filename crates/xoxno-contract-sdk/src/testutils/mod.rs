@@ -22,7 +22,13 @@ pub use market::{Market, MarketConfig, RateModel, RiskConfig};
 /// Governance and timelock. The fixture's admin holds every role.
 #[allow(clippy::too_many_arguments)]
 pub mod governance {
-    soroban_sdk::contractimport!(file = "wasm/governance.wasm");
+    mod spec {
+        soroban_sdk::contractimport!(file = "wasm/governance.wasm");
+    }
+    pub use spec::*;
+
+    /// The deployed contract code.
+    pub const WASM: &[u8] = include_bytes!("../../wasm/deploy/governance.wasm");
 }
 
 /// Reflector-style price oracle for tests: base USD, 14 decimals, 300 s

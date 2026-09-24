@@ -32,8 +32,8 @@ stellar contract build
 ## Update the embedded WASM
 
 The WASM comes from an attested
-[rs-lending-xlm](https://github.com/XOXNO/rs-lending-xlm) release, and it must
-be the code that runs on mainnet:
+[rs-lending-xlm](https://github.com/XOXNO/rs-lending-xlm) release, normally the
+code that runs on mainnet:
 
 ```bash
 python3 scripts/sync_wasm.py --release <rs-lending-xlm tag>
@@ -43,14 +43,15 @@ The script:
 
 - verifies each file's build attestation, signed by the rs-lending-xlm
   `release.yml` workflow;
-- checks that its code equals the stripped deploy artifact, and that the
+- checks that its code equals the release's deploy artifact, and that the
   artifact hash equals the live mainnet contract hash;
-- writes `wasm/MANIFEST.json` and `src/networks.rs`.
+- writes the files with docs to `wasm/`, the deploy artifacts to
+  `wasm/deploy/`, and `wasm/MANIFEST.json` and `src/networks.rs`.
 
 `--build-dir` takes a clean local rs-lending-xlm checkout of a tag after
-`make build deploy-artifacts` instead; 0.1.0 was synced this way from
-`v1.0.0`, whose release predates the SDK bundle. `--allow-undeployed` accepts
-code that is not on mainnet yet, and is for pre-releases only.
+`make build deploy-artifacts` instead. A local build does not reproduce the
+release hashes, so use it only for tests. `--allow-undeployed` accepts code
+that is not on mainnet yet, and is for pre-releases only.
 
 The `Mainnet drift` workflow runs `scripts/check_mainnet.py` every day. It
 fails when mainnet runs code that the SDK does not embed.
@@ -65,7 +66,8 @@ fails when mainnet runs code that the SDK does not embed.
 3. Run the `Publish` workflow on `main` with the version. It checks the
    version, the changelog, the WASM and the mainnet hashes, runs the tests,
    publishes to crates.io with the `CRATES_IO_TOKEN` secret, and creates the
-   `vX.Y.Z` tag and GitHub release.
+   `vX.Y.Z` tag and GitHub release. `allow_undeployed` publishes a release
+   that is not on mainnet yet; the mainnet check then only reports.
 
 ## License
 

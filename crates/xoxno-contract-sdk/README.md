@@ -10,8 +10,8 @@ The crate has two layers:
   and it returns token amounts, not raw shares.
 - **Generated clients** for the controller, pool, position NFT and price
   aggregator, for anything the wrapper does not cover. They hold only the
-  functions a builder calls, and their signatures come from WASM that has the
-  same code as the contracts deployed on Stellar mainnet.
+  functions a builder calls, and their signatures come from the WASM of an
+  attested XOXNO Lending release.
 
 It also has callback traits for flash loans, constants, the mainnet and testnet
 addresses, and a `testutils` fixture that deploys the whole protocol into a
@@ -243,23 +243,24 @@ them. The price aggregator can change: the wrapper reads it from the controller.
 `wasm/MANIFEST.json` records, for each contract:
 
 - the source repository, tag and commit;
-- the SHA-256 of the embedded file;
+- the SHA-256 of the embedded file, which keeps its contract spec docs;
 - the hash of its code without custom sections;
-- the hash of the deployed artifact.
+- the SHA-256 of the deploy artifact, embedded in `wasm/deploy/`.
 
-The deployed artifact hash is checked against the live mainnet contract when
-the WASM is synced. The embedded files keep their contract spec docs and error
-enums, so the generated clients have rustdoc and typed errors. Their code is
-identical to the deployed code.
+The generated types and clients come from the files with docs, so they have
+rustdoc and typed errors. Each module's `WASM` constant, and so the fixture,
+uses the deploy artifact: the bytes that are deployed on mainnet, so its
+SHA-256 is the on-chain WASM hash. Both files have the same code.
 
-Version 0.1.0 was synced from a clean rebuild of rs-lending-xlm `v1.0.0`
-(`"method": "build-dir"` in the manifest). The rebuild reproduced every
-mainnet hash. From the next rs-lending-xlm release on, the WASM comes from the
-release's attested SDK bundle (`"method": "release"`).
+The WASM comes from the attested build of an rs-lending-xlm GitHub release
+(`"method": "release"`). `scripts/check_mainnet.py` compares the deploy
+artifact hashes with the live mainnet contracts.
 
 | xoxno-contract-sdk | soroban-sdk | rs-lending-xlm |
 |---|---|---|
-| 0.1.x | 28 | v1.0.0 (`d26b93ebb`) |
+| 0.1.x | 28 | v1.1.0 (`1053ae033`) |
+
+0.1.0 was published before the mainnet upgrade to rs-lending-xlm v1.1.0.
 
 ## License
 

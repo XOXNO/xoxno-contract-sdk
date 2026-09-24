@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Copy a verified XOXNO Lending build into the crate.
 
-Writes crates/xoxno-contract-sdk/wasm/*.wasm, wasm/MANIFEST.json and
-src/networks.rs.
+Writes crates/xoxno-contract-sdk/wasm/*.wasm (spec docs kept, for the
+generated types), wasm/deploy/*.wasm (the deploy artifacts, byte for byte),
+wasm/MANIFEST.json and src/networks.rs.
 
 Two sources:
-  --release TAG      download the attested SDK bundle of an rs-lending-xlm
-                     GitHub release (sdk-*.wasm, sdk-manifest.json)
+  --release TAG      download the attested SDK bundle and deploy artifacts of
+                     an rs-lending-xlm GitHub release
   --build-dir PATH   use an rs-lending-xlm checkout on which
                      `make build deploy-artifacts` has run
 
@@ -32,6 +33,7 @@ SIGNER_WORKFLOW = f"{REPO}/.github/workflows/release.yml"
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CRATE = ROOT / "crates" / "xoxno-contract-sdk"
 WASM_DIR = CRATE / "wasm"
+DEPLOY_DIR = WASM_DIR / "deploy"
 NETWORKS_RS = CRATE / "src" / "networks.rs"
 
 CONTRACTS = ["controller", "pool", "position_nft", "price_aggregator", "governance"]
@@ -52,14 +54,14 @@ def fail(message: str) -> None:
 
 
 def from_build_dir(build: pathlib.Path) -> tuple[dict, dict, dict]:
-    """Returns (files, deploy_hashes, source) from a local checkout."""
+    """Returns (files, deploy_files, source) from a local checkout."""
     if run("git", "-C", str(build), "status", "--porcelain", "--untracked-files=no").strip():
         fail(f"{build} has modified tracked files; build from a clean checkout of a tag")
     files, deploy = {}, {}
     for name in CONTRACTS:
         files[name] = (build / "target" / "optimized" / f"{name}.wasm").read_bytes()
-        deploy[name] = sha256((build / "artifacts" / "wasm" / "deploy" / f"{name}.wasm").read_bytes())
-        if code_hash(files[name]) != code_hash((build / "artifacts" / "wasm" / "deploy" / f"{name}.wasm").read_bytes()):
+        deploy[name] = (build / "artifacts" / "wasm" / "deploy" / f"{name}.wasm").read_bytes()
+        if code_hash(files[name]) != code_hash(deploy[name]):
             fail(f"{name}: optimized build and deploy artifact have different code")
     release = build / "target" / "wasm32v1-none" / "release"
     for sdk_name, crate_name in MOCKS.items():
@@ -70,9 +72,10 @@ def from_build_dir(build: pathlib.Path) -> tuple[dict, dict, dict]:
 
 
 def from_release(tag: str) -> tuple[dict, dict, dict]:
-    """Returns (files, deploy_hashes, source) from an attested release."""
+    """Returns (files, deploy_files, source) from an attested release."""
     with tempfile.TemporaryDirectory() as tmp:
-        run("gh", "release", "download", tag, "-R", REPO, "-D", tmp, "-p", "sdk-*")
+        patterns = [arg for name in CONTRACTS for arg in ("-p", f"{name}.wasm")]
+        run("gh", "release", "download", tag, "-R", REPO, "-D", tmp, "-p", "sdk-*", *patterns)
         out = pathlib.Path(tmp)
         verify_attestation(out / "sdk-manifest.json")
         manifest = json.loads((out / "sdk-manifest.json").read_text())
@@ -87,13 +90,20 @@ def from_release(tag: str) -> tuple[dict, dict, dict]:
             if name in CONTRACTS:
                 if code_hash(files[name]) != entry["code_sha256"]:
                     fail(f"{name}: code hash differs from sdk-manifest.json")
-                deploy[name] = entry["deploy_sha256"]
+                deploy_path = out / f"{name}.wasm"
+                verify_attestation(deploy_path)
+                deploy[name] = deploy_path.read_bytes()
+                if sha256(deploy[name]) != entry["deploy_sha256"]:
+                    fail(f"{name}: deploy artifact hash differs from sdk-manifest.json")
+                if code_hash(deploy[name]) != entry["code_sha256"]:
+                    fail(f"{name}: deploy artifact code differs from the SDK file")
     commit = run("gh", "api", f"repos/{REPO}/commits/{tag}", "--jq", ".sha").strip()
     return files, deploy, {"tag": tag, "commit": commit, "method": "release"}
 
 
 def verify_attestation(path: pathlib.Path) -> None:
-    run("gh", "attestation", "verify", str(path), "--repo", REPO, "--signer-workflow", SIGNER_WORKFLOW)
+    run("gh", "attestation", "verify", str(path), "--repo", REPO, "--signer-workflow", SIGNER_WORKFLOW,
+        "--deny-self-hosted-runners")
 
 
 def load_config(config_dir: "pathlib.Path | None", ref: str) -> dict:
@@ -123,7 +133,8 @@ def live_wasm_hash(contract: str, cfg: dict) -> str:
 
 def check_deployed(deploy: dict, networks: dict, allow_undeployed: bool) -> None:
     mainnet = networks["mainnet"]
-    for name, digest in deploy.items():
+    for name, data in deploy.items():
+        digest = sha256(data)
         live = live_wasm_hash(mainnet[name], mainnet)
         if live != digest:
             message = f"{name}: deploy hash {digest[:12]} is not the live mainnet hash {live[:12]}"
@@ -133,7 +144,7 @@ def check_deployed(deploy: dict, networks: dict, allow_undeployed: bool) -> None
 
 
 def write_manifest(files: dict, deploy: dict, source: dict) -> None:
-    WASM_DIR.mkdir(parents=True, exist_ok=True)
+    DEPLOY_DIR.mkdir(parents=True, exist_ok=True)
     manifest = {
         "source": {
             "repository": REPO,
@@ -149,8 +160,10 @@ def write_manifest(files: dict, deploy: dict, source: dict) -> None:
         (WASM_DIR / f"{name}.wasm").write_bytes(data)
         entry = {"file": f"{name}.wasm", "sha256": sha256(data)}
         if name in CONTRACTS:
+            (DEPLOY_DIR / f"{name}.wasm").write_bytes(deploy[name])
             entry["code_sha256"] = code_hash(data)
-            entry["deploy_sha256"] = deploy[name]
+            entry["deploy_file"] = f"deploy/{name}.wasm"
+            entry["deploy_sha256"] = sha256(deploy[name])
             entry["mainnet_contract"] = mainnet[name]
             manifest["contracts"][name] = entry
         else:
