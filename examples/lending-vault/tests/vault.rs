@@ -25,7 +25,7 @@ fn setup<'a>() -> Setup<'a> {
         LendingVault,
         (
             owner.clone(),
-            fixture.controller.address.clone(),
+            fixture.addresses(),
             usdc.key.clone(),
             fixture.spoke_id,
         ),

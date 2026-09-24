@@ -6,9 +6,9 @@ crate is [`crates/xoxno-contract-sdk`](crates/xoxno-contract-sdk); its
 
 | Path | Contents |
 |---|---|
-| `crates/xoxno-contract-sdk` | The published crate: clients, types, WASM, helpers and the `testutils` fixture |
+| `crates/xoxno-contract-sdk` | The published crate: the `XoxnoLending` wrapper, generated clients, types, WASM, helpers and the `testutils` fixture |
 | `crates/xoxno-contract-sdk/wasm` | Embedded contract WASM and `MANIFEST.json` |
-| `examples/lending-vault` | Example integrator contract and its tests (not published) |
+| `examples/*` | Example integrator contracts and their tests (not published): `account-basics`, `market-picker`, `price-reader`, `liquidator`, `lending-vault` |
 | `scripts` | WASM sync, manifest and mainnet checks |
 
 ## Development
@@ -23,7 +23,7 @@ The other CI checks:
 python3 scripts/verify_wasm.py
 python3 scripts/gen_clients.py --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
-stellar contract build --package lending-vault
+stellar contract build
 ```
 
 `soroban-sdk` 28 builds contracts only through `stellar contract build`

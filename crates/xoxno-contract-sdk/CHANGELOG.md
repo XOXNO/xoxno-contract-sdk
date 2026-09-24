@@ -10,6 +10,12 @@ fixture API changed.
 
 ### Added
 
+- `XoxnoLending`, a wrapper for the calling contract: open and reuse accounts,
+  supply, borrow, repay, withdraw, liquidate, flash loans, positions, market
+  discovery across hubs and spokes, rates, and prices. `LendingAddresses` and
+  `Position` go with it.
+- Examples: `account-basics`, `market-picker`, `price-reader`, `liquidator`
+  and `lending-vault`.
 - Clients and types for the XOXNO Lending controller, pool, position NFT and
   price aggregator, generated from the rs-lending-xlm `v1.0.0` build that is
   deployed on mainnet.
@@ -17,7 +23,8 @@ fixture API changed.
 - Unit and limit constants, and the `approve_flash_repayment` and
   `authorize_transfer_as_current` helpers.
 - Mainnet and testnet addresses, hub ids and spoke ids.
-- `testutils::LendingFixture`, with USDC and XLM market presets.
+- `testutils::LendingFixture`, with USDC and XLM market presets, extra hubs
+  and spokes, and listings of one token in several hubs and spokes.
 - Builder-facing clients generated from the embedded WASM, holding only the
   functions a builder calls.
 - Built on `soroban-sdk` 28.

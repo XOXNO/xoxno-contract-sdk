@@ -16,7 +16,10 @@
 
 mod callbacks;
 pub mod constants;
+mod facade;
 pub mod helpers;
+
+pub use facade::{LendingAddresses, Position, XoxnoLending};
 
 pub use callbacks::{
     FlashLoanReceiver, FlashLoanReceiverClient, FlashPositionReceiver, FlashPositionReceiverClient,

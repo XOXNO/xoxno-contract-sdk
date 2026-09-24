@@ -4,15 +4,14 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, panic_with_error, token, vec, Address,
-    Bytes, Env,
+    contract, contracterror, contractimpl, contracttype, panic_with_error, token, Address, Bytes,
+    Env,
 };
-use xoxno_contract_sdk::lending::constants::{NEW_ACCOUNT, WITHDRAW_ALL};
+use xoxno_contract_sdk::lending::constants::NEW_ACCOUNT;
 use xoxno_contract_sdk::lending::controller::HubAssetKey;
-use xoxno_contract_sdk::lending::helpers::{
-    approve_flash_repayment, authorize_transfer_as_current,
-};
-use xoxno_contract_sdk::lending::{ControllerClient, FlashLoanReceiver};
+use xoxno_contract_sdk::lending::helpers::approve_flash_repayment;
+use xoxno_contract_sdk::lending::FlashLoanReceiver;
+use xoxno_contract_sdk::{LendingAddresses, XoxnoLending};
 
 const INSTANCE_TTL_THRESHOLD: u32 = 518_400;
 const INSTANCE_TTL_EXTEND_TO: u32 = 3_110_400;
@@ -21,8 +20,7 @@ const INSTANCE_TTL_EXTEND_TO: u32 = 3_110_400;
 #[derive(Clone)]
 pub struct Config {
     pub owner: Address,
-    pub controller: Address,
-    pub pool: Address,
+    pub lending: LendingAddresses,
     pub market: HubAssetKey,
     pub spoke_id: u32,
 }
@@ -48,17 +46,15 @@ impl LendingVault {
     pub fn __constructor(
         env: Env,
         owner: Address,
-        controller: Address,
+        lending: LendingAddresses,
         market: HubAssetKey,
         spoke_id: u32,
     ) {
-        let pool = ControllerClient::new(&env, &controller).get_pool_address();
         env.storage().instance().set(
             &Key::Config,
             &Config {
                 owner,
-                controller,
-                pool,
+                lending,
                 market,
                 spoke_id,
             },
@@ -70,16 +66,18 @@ impl LendingVault {
     pub fn deposit(env: Env, from: Address, amount: i128) -> u64 {
         from.require_auth();
         let cfg = config(&env);
-        let this = env.current_contract_address();
-        token::Client::new(&env, &cfg.market.asset).transfer(&from, &this, &amount);
-
-        authorize_transfer_as_current(&env, &cfg.market.asset, &this, &cfg.pool, amount);
-        let account_id = ControllerClient::new(&env, &cfg.controller).supply(
-            &this,
-            &account(&env),
-            &cfg.spoke_id,
-            &vec![&env, (cfg.market.clone(), amount)],
+        token::Client::new(&env, &cfg.market.asset).transfer(
+            &from,
+            env.current_contract_address(),
+            &amount,
         );
+
+        let lending = XoxnoLending::new(&env, &cfg.lending);
+        let stored = env.storage().instance().get(&Key::Account);
+        let account_id = match lending.resolve_account(stored) {
+            NEW_ACCOUNT => lending.open_account(cfg.spoke_id, &cfg.market, amount),
+            account_id => lending.supply(account_id, &cfg.market, amount),
+        };
         env.storage().instance().set(&Key::Account, &account_id);
         env.storage()
             .instance()
@@ -91,22 +89,24 @@ impl LendingVault {
     pub fn withdraw_all(env: Env) -> i128 {
         let cfg = config(&env);
         cfg.owner.require_auth();
-        let withdrawn = ControllerClient::new(&env, &cfg.controller).withdraw(
-            &env.current_contract_address(),
-            &account(&env),
-            &vec![&env, (cfg.market.clone(), WITHDRAW_ALL)],
-            &Some(cfg.owner.clone()),
-        );
+        let lending = XoxnoLending::new(&env, &cfg.lending);
+        let withdrawn = lending.withdraw_all(account(&env), &cfg.market);
         env.storage().instance().remove(&Key::Account);
-        withdrawn.iter().map(|(_, amount)| amount).sum()
+        token::Client::new(&env, &cfg.market.asset).transfer(
+            &env.current_contract_address(),
+            &cfg.owner,
+            &withdrawn,
+        );
+        withdrawn
     }
 
     /// Value of the vault's position in the market token, interest included.
     pub fn balance(env: Env) -> i128 {
         let cfg = config(&env);
         match env.storage().instance().get::<_, u64>(&Key::Account) {
-            Some(account_id) => ControllerClient::new(&env, &cfg.controller)
-                .get_collateral_amount(&account_id, &cfg.market),
+            Some(account_id) => {
+                XoxnoLending::new(&env, &cfg.lending).collateral(account_id, &cfg.market)
+            }
             None => 0,
         }
     }
@@ -124,8 +124,8 @@ impl FlashLoanReceiver for LendingVault {
         _data: Bytes,
     ) {
         let cfg = config(&env);
-        cfg.pool.require_auth();
-        if initiator != cfg.owner || pool != cfg.pool {
+        cfg.lending.pool.require_auth();
+        if initiator != cfg.owner || pool != cfg.lending.pool {
             panic_with_error!(&env, VaultError::UnexpectedFlashLoan);
         }
         approve_flash_repayment(&env, &asset, &pool, amount + fee);

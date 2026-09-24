@@ -1,0 +1,24 @@
+[package]
+name = "market-picker"
+version = "0.0.0"
+description = "Example: pick the hub and spoke to supply a token to, and read market rates."
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = { workspace = true }
+xoxno-contract-sdk = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+xoxno-contract-sdk = { workspace = true, features = ["testutils"] }
+
+[lints]
+workspace = true

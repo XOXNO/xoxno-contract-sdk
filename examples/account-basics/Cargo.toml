@@ -1,0 +1,24 @@
+[package]
+name = "account-basics"
+version = "0.0.0"
+description = "Example: open an XOXNO Lending account with a first supply, reuse it, borrow, repay and withdraw."
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = { workspace = true }
+xoxno-contract-sdk = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+xoxno-contract-sdk = { workspace = true, features = ["testutils"] }
+
+[lints]
+workspace = true

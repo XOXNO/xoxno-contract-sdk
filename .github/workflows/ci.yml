@@ -51,8 +51,8 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
-      - name: The example contract, and the crate without std, build for wasm32v1-none
-        run: stellar contract build --package lending-vault
+      - name: The example contracts, and the crate without std, build for wasm32v1-none
+        run: stellar contract build
 
       - name: Package contents
         run: |

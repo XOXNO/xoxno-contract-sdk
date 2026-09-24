@@ -11,12 +11,12 @@ use super::governance::{
     MultiFeedRef, OracleAssetRef, OracleReadMode, PriceKey, PriceSource, ProviderRef,
     ReflectorFeedRef, SpokeAssetArgs, SpokeLiquidationCurveArgs,
 };
-use super::{mock_redstone, mock_reflector, Market, MarketConfig};
+use super::{mock_redstone, mock_reflector, Market, MarketConfig, RateModel, RiskConfig};
 use crate::lending::constants::{NEW_ACCOUNT, WAD};
 use crate::lending::controller::HubAssetKey;
 use crate::lending::{
-    controller, pool, position_nft, price_aggregator, ControllerClient, PoolClient,
-    PositionNftClient, PriceAggregatorClient,
+    controller, pool, position_nft, price_aggregator, ControllerClient, LendingAddresses,
+    PoolClient, PositionNftClient, PriceAggregatorClient,
 };
 
 const MIN_TIMESTAMP: u64 = 1_000_000;
@@ -41,10 +41,10 @@ const LIQUIDATION_BONUS_FACTOR_BPS: u32 = 1_500;
 /// 1,000,000 (the TWAP feed needs price history before "now"), raises the
 /// sequence to at least 100 (the timelock reserves ledger 1), raises the
 /// minimum persistent entry TTL to 10,000,000 ledgers and the maximum entry
-/// TTL above it (about 1.6 years, so
-/// long [`advance_time`](Self::advance_time) jumps do not archive the
-/// protocol's entries), and moves the sequence forward by one ledger for each
-/// timelocked operation.
+/// TTL above it (about 1.6 years, so long
+/// [`advance_time`](Self::advance_time) jumps do not archive the protocol's
+/// entries), and moves the sequence forward by one ledger for each timelocked
+/// operation.
 ///
 /// The fixture authorizes its own admin calls per call, so it does not change
 /// the auth mode of `env`. It does set the budget of `env` to unlimited, as the
@@ -62,11 +62,12 @@ pub struct LendingFixture<'a> {
     pub price_aggregator: PriceAggregatorClient<'a>,
     pub reflector: mock_reflector::Client<'a>,
     pub redstone: mock_redstone::Client<'a>,
-    /// Hub of every fixture market.
+    /// The default hub; [`create_market`](Self::create_market) lists markets here.
     pub hub_id: u32,
-    /// Spoke of every fixture market; open accounts in this spoke.
+    /// The default spoke; [`create_market`](Self::create_market) lists markets here.
     pub spoke_id: u32,
-    markets: RefCell<std::vec::Vec<(Address, String, i128)>>,
+    prices: RefCell<std::vec::Vec<(Address, String, i128)>>,
+    markets: RefCell<std::vec::Vec<HubAssetKey>>,
     next_salt: Cell<u32>,
 }
 
@@ -111,6 +112,7 @@ impl<'a> LendingFixture<'a> {
             redstone: mock_redstone::Client::new(env, &env.register(mock_redstone::WASM, ())),
             hub_id: 0,
             spoke_id: 0,
+            prices: RefCell::new(std::vec::Vec::new()),
             markets: RefCell::new(std::vec::Vec::new()),
             next_salt: Cell::new(1),
         };
@@ -139,26 +141,8 @@ impl<'a> LendingFixture<'a> {
                 nft_args.symbol.into_val(env),
             ],
         ));
-        let hub_id = fixture.governance.mock_all_auths().create_hub(admin);
-        let spoke_id = fixture.governance.mock_all_auths().add_spoke(admin);
-        let curve = SpokeLiquidationCurveArgs {
-            hf_for_max_bonus_wad: HF_FOR_MAX_BONUS_WAD,
-            liquidation_bonus_factor_bps: LIQUIDATION_BONUS_FACTOR_BPS,
-            spoke_id,
-            target_hf_wad: TARGET_HF_WAD,
-        };
-        fixture.execute(
-            AdminOperation::SetSpokeLiquidationCurve(curve.clone()),
-            &controller_address,
-            "set_spoke_liquidation_curve",
-            vec![
-                env,
-                curve.spoke_id.into_val(env),
-                curve.target_hf_wad.into_val(env),
-                curve.hf_for_max_bonus_wad.into_val(env),
-                curve.liquidation_bonus_factor_bps.into_val(env),
-            ],
-        );
+        let hub_id = fixture.add_hub();
+        let spoke_id = fixture.add_spoke();
         fixture.execute(
             AdminOperation::Unpause,
             &controller_address,
@@ -175,106 +159,141 @@ impl<'a> LendingFixture<'a> {
         }
     }
 
-    /// Lists a new market in the fixture's hub and spoke, configures its
+    /// The deployment's addresses, for [`XoxnoLending`](crate::XoxnoLending)
+    /// inside the contract under test.
+    pub fn addresses(&self) -> LendingAddresses {
+        LendingAddresses {
+            controller: self.controller.address.clone(),
+            pool: self.pool.address.clone(),
+            position_nft: self.position_nft.address.clone(),
+        }
+    }
+
+    /// Creates a new hub and returns its id.
+    pub fn add_hub(&self) -> u32 {
+        self.governance.mock_all_auths().create_hub(&self.admin)
+    }
+
+    /// Creates a new spoke with the mainnet "Blue Chip" liquidation curve and
+    /// returns its id.
+    pub fn add_spoke(&self) -> u32 {
+        let spoke_id = self.governance.mock_all_auths().add_spoke(&self.admin);
+        let env = &self.env;
+        let curve = SpokeLiquidationCurveArgs {
+            hf_for_max_bonus_wad: HF_FOR_MAX_BONUS_WAD,
+            liquidation_bonus_factor_bps: LIQUIDATION_BONUS_FACTOR_BPS,
+            spoke_id,
+            target_hf_wad: TARGET_HF_WAD,
+        };
+        self.execute(
+            AdminOperation::SetSpokeLiquidationCurve(curve.clone()),
+            &self.controller.address,
+            "set_spoke_liquidation_curve",
+            vec![
+                env,
+                curve.spoke_id.into_val(env),
+                curve.target_hf_wad.into_val(env),
+                curve.hf_for_max_bonus_wad.into_val(env),
+                curve.liquidation_bonus_factor_bps.into_val(env),
+            ],
+        );
+        spoke_id
+    }
+
+    /// Creates a market in the default hub and spoke; see
+    /// [`create_market_in`](Self::create_market_in).
+    pub fn create_market(&self, cfg: &MarketConfig) -> Market<'a> {
+        self.create_market_in(cfg, self.hub_id, self.spoke_id)
+    }
+
+    /// Creates a new token, lists it in `hub_id` and `spoke_id`, configures its
     /// dual-source oracle at `cfg.price_wad`, and supplies
     /// `cfg.initial_liquidity` from a new liquidity provider.
-    pub fn create_market(&self, cfg: &MarketConfig) -> Market<'a> {
+    pub fn create_market_in(&self, cfg: &MarketConfig, hub_id: u32, spoke_id: u32) -> Market<'a> {
         let env = &self.env;
         let asset = env
             .register_stellar_asset_contract_v2(self.admin.clone())
             .address();
-        let controller_address = self.controller.address.clone();
-
-        let params = MarketParamsRaw {
-            asset_decimals: TOKEN_DECIMALS,
-            asset_id: asset.clone(),
-            base_borrow_rate: cfg.rates.base_borrow_rate,
-            flashloan_fee: cfg.rates.flashloan_fee,
-            is_flashloanable: cfg.rates.is_flashloanable,
-            max_borrow_rate: cfg.rates.max_borrow_rate,
-            max_utilization: cfg.rates.max_utilization,
-            mid_utilization: cfg.rates.mid_utilization,
-            optimal_utilization: cfg.rates.optimal_utilization,
-            reserve_factor: cfg.rates.reserve_factor,
-            slope1: cfg.rates.slope1,
-            slope2: cfg.rates.slope2,
-            slope3: cfg.rates.slope3,
-        };
-        self.execute(
-            AdminOperation::CreateLiquidityPool(CreatePoolArgs {
-                asset: asset.clone(),
-                hub_id: self.hub_id,
-                params: params.clone(),
-            }),
-            &controller_address,
-            "create_liquidity_pool",
-            vec![
-                env,
-                self.hub_id.into_val(env),
-                asset.into_val(env),
-                params.into_val(env),
-            ],
-        );
-
-        let spoke_asset = SpokeAssetArgs {
-            asset: asset.clone(),
-            bonus: cfg.risk.liquidation_bonus,
-            borrow_cap: cfg.risk.borrow_cap,
-            can_borrow: cfg.risk.can_be_borrowed,
-            can_collateral: cfg.risk.can_be_collateral,
-            frozen: false,
-            hub_id: self.hub_id,
-            liquidation_fees: cfg.risk.liquidation_fees,
-            ltv: cfg.risk.ltv,
-            no_seize: false,
-            paused: false,
-            spoke_id: self.spoke_id,
-            supply_cap: cfg.risk.supply_cap,
-            threshold: cfg.risk.liquidation_threshold,
-        };
-        self.execute(
-            AdminOperation::AddAssetToSpoke(spoke_asset.clone()),
-            &controller_address,
-            "add_asset_to_spoke",
-            vec![env, spoke_asset.into_val(env)],
-        );
+        let key = self.create_pool(&asset, hub_id, &cfg.rates);
+        self.list_market(&key, spoke_id, &cfg.risk);
 
         let feed_id = String::from_str(env, cfg.symbol);
-        self.markets
+        self.prices
             .borrow_mut()
             .push((asset.clone(), feed_id.clone(), cfg.price_wad));
         self.push_price(&asset, &feed_id, cfg.price_wad);
         self.configure_oracle(&asset, &feed_id);
 
         let market = Market {
-            key: HubAssetKey {
-                asset: asset.clone(),
-                hub_id: self.hub_id,
-            },
+            key,
             token: token::TokenClient::new(env, &asset),
             sac: token::StellarAssetClient::new(env, &asset),
             asset,
             feed_id,
         };
         if cfg.initial_liquidity > 0 {
-            let provider = Address::generate(env);
-            market
-                .sac
-                .mock_all_auths()
-                .mint(&provider, &cfg.initial_liquidity);
-            self.controller.mock_all_auths().supply(
-                &provider,
-                &NEW_ACCOUNT,
-                &self.spoke_id,
-                &vec![env, (market.key.clone(), cfg.initial_liquidity)],
-            );
+            self.supply_liquidity(&market.key, spoke_id, cfg.initial_liquidity);
         }
         market
     }
 
+    /// Lists the token of `market` in another hub with its own rate curve and
+    /// returns the new market key. List it in a spoke with
+    /// [`list_market`](Self::list_market) before using it.
+    pub fn add_market_to_hub(
+        &self,
+        market: &Market,
+        hub_id: u32,
+        rates: &RateModel,
+    ) -> HubAssetKey {
+        self.create_pool(&market.asset, hub_id, rates)
+    }
+
+    /// Lists an existing market in `spoke_id` with `risk`.
+    pub fn list_market(&self, market: &HubAssetKey, spoke_id: u32, risk: &RiskConfig) {
+        let env = &self.env;
+        let args = SpokeAssetArgs {
+            asset: market.asset.clone(),
+            bonus: risk.liquidation_bonus,
+            borrow_cap: risk.borrow_cap,
+            can_borrow: risk.can_be_borrowed,
+            can_collateral: risk.can_be_collateral,
+            frozen: false,
+            hub_id: market.hub_id,
+            liquidation_fees: risk.liquidation_fees,
+            ltv: risk.ltv,
+            no_seize: false,
+            paused: false,
+            spoke_id,
+            supply_cap: risk.supply_cap,
+            threshold: risk.liquidation_threshold,
+        };
+        self.execute(
+            AdminOperation::AddAssetToSpoke(args.clone()),
+            &self.controller.address,
+            "add_asset_to_spoke",
+            vec![env, args.into_val(env)],
+        );
+    }
+
+    /// Supplies `amount` of `market` from a new liquidity provider's account in
+    /// `spoke_id`, so the market has cash to lend.
+    pub fn supply_liquidity(&self, market: &HubAssetKey, spoke_id: u32, amount: i128) {
+        let provider = Address::generate(&self.env);
+        token::StellarAssetClient::new(&self.env, &market.asset)
+            .mock_all_auths()
+            .mint(&provider, &amount);
+        self.controller.mock_all_auths().supply(
+            &provider,
+            &NEW_ACCOUNT,
+            &spoke_id,
+            &vec![&self.env, (market.clone(), amount)],
+        );
+    }
+
     /// Sets the USD price of `market`, WAD, on both oracle feeds.
     pub fn set_price(&self, market: &Market, price_wad: i128) {
-        for entry in self.markets.borrow_mut().iter_mut() {
+        for entry in self.prices.borrow_mut().iter_mut() {
             if entry.0 == market.asset {
                 entry.2 = price_wad;
             }
@@ -283,27 +302,66 @@ impl<'a> LendingFixture<'a> {
     }
 
     /// Moves the ledger forward by `seconds` (and by one ledger per 5
-    /// seconds), publishes every market's current price again at the new
-    /// time, and accrues interest on every market.
+    /// seconds), publishes every price again at the new time, and accrues
+    /// interest on every market.
     pub fn advance_time(&self, seconds: u64) {
         self.env.ledger().with_mut(|l| {
             l.timestamp = l.timestamp.saturating_add(seconds);
             let ledgers = u32::try_from(seconds / SECONDS_PER_LEDGER).unwrap_or(u32::MAX);
             l.sequence_number = l.sequence_number.saturating_add(ledgers);
         });
-        let mut keys = Vec::new(&self.env);
-        for (asset, feed_id, price_wad) in self.markets.borrow().iter() {
+        for (asset, feed_id, price_wad) in self.prices.borrow().iter() {
             self.push_price(asset, feed_id, *price_wad);
-            keys.push_back(HubAssetKey {
-                asset: asset.clone(),
-                hub_id: self.hub_id,
-            });
+        }
+        let mut keys = Vec::new(&self.env);
+        for key in self.markets.borrow().iter() {
+            keys.push_back(key.clone());
         }
         if !keys.is_empty() {
             self.controller
                 .mock_all_auths()
                 .update_indexes(&self.admin, &keys);
         }
+    }
+
+    fn create_pool(&self, asset: &Address, hub_id: u32, rates: &RateModel) -> HubAssetKey {
+        let env = &self.env;
+        let params = MarketParamsRaw {
+            asset_decimals: TOKEN_DECIMALS,
+            asset_id: asset.clone(),
+            base_borrow_rate: rates.base_borrow_rate,
+            flashloan_fee: rates.flashloan_fee,
+            is_flashloanable: rates.is_flashloanable,
+            max_borrow_rate: rates.max_borrow_rate,
+            max_utilization: rates.max_utilization,
+            mid_utilization: rates.mid_utilization,
+            optimal_utilization: rates.optimal_utilization,
+            reserve_factor: rates.reserve_factor,
+            slope1: rates.slope1,
+            slope2: rates.slope2,
+            slope3: rates.slope3,
+        };
+        self.execute(
+            AdminOperation::CreateLiquidityPool(CreatePoolArgs {
+                asset: asset.clone(),
+                hub_id,
+                params: params.clone(),
+            }),
+            &self.controller.address,
+            "create_liquidity_pool",
+            vec![
+                env,
+                hub_id.into_val(env),
+                asset.into_val(env),
+                params.into_val(env),
+            ],
+        );
+        let key = HubAssetKey {
+            asset: asset.clone(),
+            hub_id,
+        };
+        self.markets.borrow_mut().push(key.clone());
+        key
     }
 
     fn push_price(&self, asset: &Address, feed_id: &String, price_wad: i128) {
