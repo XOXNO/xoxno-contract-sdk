@@ -6,7 +6,7 @@ All notable changes to this crate are recorded here. The format follows
 means the embedded WASM, the ABI, the `soroban-sdk` major version or the
 fixture API changed.
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-09-24
 
 ### Added
 
