@@ -9,7 +9,7 @@ crate is [`crates/xoxno-contract-sdk`](crates/xoxno-contract-sdk); its
 | `crates/xoxno-contract-sdk` | The published crate: the `XoxnoLending` wrapper, generated clients, types, WASM, helpers and the `testutils` fixture |
 | `crates/xoxno-contract-sdk/wasm` | Embedded contract WASM and `MANIFEST.json` |
 | `examples/*` | Example integrator contracts and their tests (not published): `simple-deposit`, `account-basics`, `market-picker`, `price-reader`, `liquidator`, `lending-vault` |
-| `scripts` | WASM sync, manifest and mainnet checks |
+| `scripts` | WASM sync, manifest, mainnet and README example checks |
 
 ## Development
 

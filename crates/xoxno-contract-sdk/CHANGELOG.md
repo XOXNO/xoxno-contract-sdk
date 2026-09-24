@@ -6,6 +6,16 @@ All notable changes to this crate are recorded here. The format follows
 means the embedded WASM, the ABI, the `soroban-sdk` major version or the
 fixture API changed.
 
+## [0.1.1] - 2026-09-24
+
+### Changed
+
+- README: every example is a complete item with its own imports and typed
+  inputs; operations, reads, markets and prices are reference tables; the
+  testing section shows a contract and its fixture test.
+- `scripts/check_readme.py` compiles every README example and runs its tests;
+  CI runs it.
+
 ## [0.1.0] - 2026-09-24
 
 ### Added
