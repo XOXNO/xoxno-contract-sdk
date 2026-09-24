@@ -32,8 +32,8 @@ stellar contract build
 ## Update the embedded WASM
 
 The WASM comes from an attested
-[rs-lending-xlm](https://github.com/XOXNO/rs-lending-xlm) release, and it must
-be the code that runs on mainnet:
+[rs-lending-xlm](https://github.com/XOXNO/rs-lending-xlm) release, normally the
+code that runs on mainnet:
 
 ```bash
 python3 scripts/sync_wasm.py --release <rs-lending-xlm tag>
@@ -66,7 +66,8 @@ fails when mainnet runs code that the SDK does not embed.
 3. Run the `Publish` workflow on `main` with the version. It checks the
    version, the changelog, the WASM and the mainnet hashes, runs the tests,
    publishes to crates.io with the `CRATES_IO_TOKEN` secret, and creates the
-   `vX.Y.Z` tag and GitHub release.
+   `vX.Y.Z` tag and GitHub release. `allow_undeployed` publishes a release
+   that is not on mainnet yet; the mainnet check then only reports.
 
 ## License
 

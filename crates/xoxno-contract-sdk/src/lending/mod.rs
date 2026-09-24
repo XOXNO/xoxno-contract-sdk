@@ -2,9 +2,9 @@
 //!
 //! Each contract module is generated with `contractimport!` from the WASM in
 //! `wasm/`, which keeps the contract spec docs and has the same code as the
-//! contract deployed on mainnet (see `wasm/MANIFEST.json`). A module exports
-//! its `Client`, every type and error in its contract spec, and `WASM`: the
-//! deployed bytes from `wasm/deploy/`, whose hash is the mainnet WASM hash.
+//! release's deploy artifact (see `wasm/MANIFEST.json`). A module exports its
+//! `Client`, every type and error in its contract spec, and `WASM`: the deploy
+//! artifact from `wasm/deploy/`, byte for byte.
 //!
 //! The types of each module are separate Rust types: `controller::HubAssetKey`
 //! and `pool::HubAssetKey` do not convert into each other. Use the

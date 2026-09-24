@@ -10,8 +10,8 @@ The crate has two layers:
   and it returns token amounts, not raw shares.
 - **Generated clients** for the controller, pool, position NFT and price
   aggregator, for anything the wrapper does not cover. They hold only the
-  functions a builder calls, and their signatures come from WASM that has the
-  same code as the contracts deployed on Stellar mainnet.
+  functions a builder calls, and their signatures come from the WASM of an
+  attested XOXNO Lending release.
 
 It also has callback traits for flash loans, constants, the mainnet and testnet
 addresses, and a `testutils` fixture that deploys the whole protocol into a
@@ -249,16 +249,18 @@ them. The price aggregator can change: the wrapper reads it from the controller.
 
 The generated types and clients come from the files with docs, so they have
 rustdoc and typed errors. Each module's `WASM` constant, and so the fixture,
-uses the deploy artifact: the bytes deployed on mainnet, whose SHA-256 is the
-on-chain WASM hash. Both files have the same code.
+uses the deploy artifact: the bytes that are deployed on mainnet, so its
+SHA-256 is the on-chain WASM hash. Both files have the same code.
 
 The WASM comes from the attested build of an rs-lending-xlm GitHub release
-(`"method": "release"`). The deploy artifact hash is checked against the live
-mainnet contract when the WASM is synced and before each publish.
+(`"method": "release"`). `scripts/check_mainnet.py` compares the deploy
+artifact hashes with the live mainnet contracts.
 
 | xoxno-contract-sdk | soroban-sdk | rs-lending-xlm |
 |---|---|---|
 | 0.1.x | 28 | v1.1.0 (`1053ae033`) |
+
+0.1.0 was published before the mainnet upgrade to rs-lending-xlm v1.1.0.
 
 ## License
 
