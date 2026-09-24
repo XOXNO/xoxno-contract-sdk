@@ -1,0 +1,54 @@
+{
+  "source": {
+    "repository": "XOXNO/rs-lending-xlm",
+    "tag": "v1.0.0",
+    "commit": "d26b93ebb48d718b69571ec737f0097af3379916"
+  },
+  "contracts": {
+    "controller": {
+      "file": "controller.wasm",
+      "sha256": "c357e6733f70aae8c1ab34a672a57e96ea5d256e934f05be627989d468db4bb6",
+      "code_sha256": "2ff959ab86dc790ce7c96c09f6c12ef919f5f9a0bed941935169db59eb308610",
+      "deploy_sha256": "03a8630ff42439b7484d7cf4971e3311504a79a98db9b88c81ab0efe748f8fe3",
+      "mainnet_contract": "CAUCMIN5KSXEVZ7NMXR3LZATGD5EFIEUI5XWTFLYRO2R5OTXI22WE5JX"
+    },
+    "pool": {
+      "file": "pool.wasm",
+      "sha256": "307f7a0763740e4f4cb88218e3fb1cccd01b92c6472e65993307c725b7a87b35",
+      "code_sha256": "9f28e218a9c097ea47351ec7059837d211180781c8d6496c792e282bcc877d96",
+      "deploy_sha256": "c2857740717a87b58c20b11e68dbacd4f4ab2da1a1cde03f0bc179a8a9f11228",
+      "mainnet_contract": "CBXRNDQMAJFG4VUKMKFEMFS75UUXE2SPSNV4LEEFCSNBCN66PYRWBKXO"
+    },
+    "position_nft": {
+      "file": "position_nft.wasm",
+      "sha256": "ddd9f3cce7c6a085fde298fd69ebd2e7c268202e6c7fc7594df92fd2400268a7",
+      "code_sha256": "deea012347e579417bfa178d042872b28dbd51a575180142ddc7bfe5cd7b5713",
+      "deploy_sha256": "b93a6e6cf89bea479f87fbc0781d3058257e001a2fe041b5b1ee00e4b919243c",
+      "mainnet_contract": "CAWCSG77AY2W24QZ6ZXLHZU4UXEFHZBM6EI4A4IF7JB5CTY4XND3TI6C"
+    },
+    "price_aggregator": {
+      "file": "price_aggregator.wasm",
+      "sha256": "cf6a2931d4695207a254057faf321c44756704f83b594425c416b09e90dc76a3",
+      "code_sha256": "2fb5a366bb80b88ca4cdef2fa646cbb85545d5c8b58b17391f38d5d9032440a7",
+      "deploy_sha256": "7807901b2c98c19a56de016c5cf42b4df1c37702a34e38b6d567ce08e41bc8e4",
+      "mainnet_contract": "CBGUF2G2Q7HCVCWYISDXBHPVBGMYNXA7PG2VET66YBZX6IKOOV27NSMV"
+    },
+    "governance": {
+      "file": "governance.wasm",
+      "sha256": "fc3aca44e2c4d0c084b548814f2639b63625317d6b430235ea02795284a2fe0b",
+      "code_sha256": "652aa0a66967855968165223a74e2687116d3c6f78bbadea80b40d8ad6bb9215",
+      "deploy_sha256": "754486d7d80cc6de6af86a5db0ea6be39b6b654e6e61a9390a1e3ec13c2662c5",
+      "mainnet_contract": "CC44PEQW7HSEPKAZ5ZRPH2JS5M5KVJXCUBLJ2ZX4E3WCDKMNFILHC2AD"
+    }
+  },
+  "mocks": {
+    "mock_reflector": {
+      "file": "mock_reflector.wasm",
+      "sha256": "195fcfb181e5f8825ba984914f8b0290848336039877de9ff76d0e109f1dd052"
+    },
+    "mock_redstone": {
+      "file": "mock_redstone.wasm",
+      "sha256": "32b86421afece474dcc491645c1c7754ff7169a29a34483cd6f0919b5f17a99b"
+    }
+  }
+}

@@ -1,0 +1,20 @@
+# Changelog
+
+All notable changes to this crate are recorded here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the crate uses
+[semantic versioning](https://semver.org/): before 1.0, a minor version bump
+means the embedded WASM, the ABI, the `soroban-sdk` major version or the
+fixture API changed.
+
+## [0.1.0] - Unreleased
+
+### Added
+
+- Clients and types for the XOXNO Lending controller, pool, position NFT and
+  price aggregator, generated from the rs-lending-xlm `v1.0.0` build that is
+  deployed on mainnet.
+- `FlashLoanReceiver` and `FlashPositionReceiver` callback traits.
+- Unit and limit constants, and the `approve_flash_repayment` and
+  `authorize_transfer_as_current` helpers.
+- Mainnet and testnet addresses, hub ids and spoke ids.
+- `testutils::LendingFixture`, with USDC and XLM market presets.

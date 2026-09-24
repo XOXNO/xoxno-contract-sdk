@@ -1,0 +1,67 @@
+name: Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish; must equal the version in crates/xoxno-contract-sdk/Cargo.toml"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: crates-io
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: "1.95"
+          targets: wasm32v1-none
+          components: clippy
+
+      - name: Version, changelog and tag
+        run: |
+          manifest="$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c 'import json, sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "xoxno-contract-sdk"))')"
+          [ "$manifest" = "$VERSION" ] || { echo "Cargo.toml has $manifest, not $VERSION"; exit 1; }
+          grep -q "^## \[$VERSION\]" crates/xoxno-contract-sdk/CHANGELOG.md \
+            || { echo "CHANGELOG.md has no section for $VERSION"; exit 1; }
+          if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+            echo "tag v$VERSION already exists"; exit 1
+          fi
+
+      - name: Embedded WASM matches MANIFEST.json
+        run: python3 scripts/verify_wasm.py
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace --all-features
+
+      - name: Publish dry run
+        run: cargo publish -p xoxno-contract-sdk --dry-run
+
+      - name: Publish
+        run: cargo publish -p xoxno-contract-sdk
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+
+      - name: Tag and GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag "v$VERSION"
+          git push origin "v$VERSION"
+          awk -v v="$VERSION" '$0 ~ "^## \\[" v "\\]" {f=1; next} /^## \[/ {f=0} f' \
+            crates/xoxno-contract-sdk/CHANGELOG.md > notes.md
+          gh release create "v$VERSION" --title "v$VERSION" --notes-file notes.md \
+            crates/xoxno-contract-sdk/wasm/MANIFEST.json

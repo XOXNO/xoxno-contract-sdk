@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: "1.95"
+          targets: wasm32v1-none
+          components: rustfmt, clippy
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Embedded WASM matches MANIFEST.json
+        run: python3 scripts/verify_wasm.py
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace --all-features
+
+      - name: Docs
+        run: cargo doc --no-deps --all-features -p xoxno-contract-sdk
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+      - name: The crate builds without std
+        run: cargo build -p xoxno-contract-sdk --target wasm32v1-none
+
+      - name: The example contract builds for wasm32v1-none
+        run: cargo build -p lending-vault --target wasm32v1-none --release
+
+      - name: Package contents
+        run: |
+          cargo package -p xoxno-contract-sdk --list > package.txt
+          for f in LICENSE README.md CHANGELOG.md wasm/MANIFEST.json wasm/controller.wasm; do
+            grep -qx "$f" package.txt || { echo "package is missing $f"; exit 1; }
+          done
+
+      - name: Publish dry run
+        run: cargo publish -p xoxno-contract-sdk --dry-run
+
+  msrv:
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: "1.91"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: "1.91"
+
+      - name: The crate builds with the MSRV
+        run: cargo check -p xoxno-contract-sdk --all-features

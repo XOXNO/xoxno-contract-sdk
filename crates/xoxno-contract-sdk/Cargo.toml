@@ -1,0 +1,42 @@
+[package]
+name = "xoxno-contract-sdk"
+version = "0.1.0"
+description = "Clients, types, WASM and a test fixture for calling XOXNO Lending from Soroban contracts."
+readme = "README.md"
+documentation = "https://docs.rs/xoxno-contract-sdk"
+keywords = ["soroban", "stellar", "lending", "defi", "xoxno"]
+categories = ["cryptography::cryptocurrencies", "no-std", "wasm", "development-tools::testing"]
+include = [
+    "Cargo.toml",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "src/**/*.rs",
+    "wasm/*.wasm",
+    "wasm/MANIFEST.json",
+]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[lib]
+doctest = false
+
+[features]
+default = []
+testutils = ["soroban-sdk/testutils"]
+
+[dependencies]
+soroban-sdk = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
