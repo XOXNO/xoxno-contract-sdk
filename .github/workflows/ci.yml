@@ -31,6 +31,12 @@ jobs:
       - name: Embedded WASM matches MANIFEST.json
         run: python3 scripts/verify_wasm.py
 
+      - name: Install stellar-cli
+        run: bash .github/scripts/install-stellar-cli.sh
+
+      - name: Generated clients match the embedded WASM
+        run: python3 scripts/gen_clients.py --check
+
       - name: Format
         run: cargo fmt --all -- --check
 

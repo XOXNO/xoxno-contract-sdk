@@ -208,6 +208,7 @@ def main() -> None:
         shutil.rmtree(WASM_DIR)
     write_manifest(files, deploy, source)
     write_networks(source)
+    subprocess.run([sys.executable, str(ROOT / "scripts" / "gen_clients.py")], check=True)
     print(f"synced {len(files)} files from {source['tag']} ({source['commit'][:9]})")
 
 
