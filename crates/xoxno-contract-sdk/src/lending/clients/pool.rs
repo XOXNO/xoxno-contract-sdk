@@ -30,12 +30,12 @@ pub trait PoolReader {
     fn get_borrowed_amount(env: soroban_sdk::Env, hub_asset: HubAssetKey) -> i128;
     /// Milliseconds since the market's last interest accrual timestamp.
     fn get_delta_time(env: soroban_sdk::Env, hub_asset: HubAssetKey) -> u64;
-    /// Full market params + state blob used for hub sync / off-chain indexing.
+    /// Stored market params and state, without accrual.
     fn get_sync_data(env: soroban_sdk::Env, hub_asset: HubAssetKey) -> PoolSyncData;
-    /// Simulate accrued indexes for many markets without writing state.
+    /// Returns each market's indexes accrued to the current ledger time, in
+    /// request order, without writing state.
     ///
-    /// For each key, loads sync data and runs `simulate_update_indexes` to the
-    /// current ledger time. Useful for the hub to refresh position valuations.
+    /// Runs `simulate_update_indexes` on each market's stored sync data.
     fn get_bulk_indexes(
         env: soroban_sdk::Env,
         hub_assets: soroban_sdk::Vec<HubAssetKey>,

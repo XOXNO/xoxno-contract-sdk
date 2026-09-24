@@ -64,6 +64,7 @@ pub trait Controller {
     );
     /// Flash-loans `amount` of `asset` to a deployed Wasm `receiver`, invoking
     /// its callback with `data`. The pool recovers principal plus fee before return.
+    /// Permissionless; requires caller authorization.
     fn flash_loan(
         env: soroban_sdk::Env,
         caller: soroban_sdk::Address,
@@ -76,7 +77,8 @@ pub trait Controller {
     /// and invokes the Wasm receiver's `execute_flash_position` callback.
     /// `collaterals` sets minimum controller-balance increases to deposit;
     /// listed `refund_assets` balance increases return to the caller.
-    /// Returns the solvent account's id; `account_id = 0` creates it.
+    /// Returns the solvent account's id; `account_id = 0` creates it. An existing
+    /// account requires owner or delegate authorization and a matching mode.
     fn flash_position(
         env: soroban_sdk::Env,
         caller: soroban_sdk::Address,
@@ -94,6 +96,7 @@ pub trait Controller {
     /// proceeds. An `initial_payment` in collateral joins the deposit; one in debt
     /// joins `swap`; a third asset requires `convert_swap` or reverts with
     /// `ConvertStepsRequired`. Returns the account id; `account_id = 0` creates it.
+    /// An existing account requires owner or delegate authorization and a matching mode.
     fn multiply(
         env: soroban_sdk::Env,
         caller: soroban_sdk::Address,
@@ -132,7 +135,8 @@ pub trait Controller {
     /// Repays `debt` from `collateral`, netting directly for the same hub asset
     /// (`swap` must be empty) or converting otherwise. `close_position` withdraws
     /// all remaining collateral to the caller, reverting with
-    /// `CannotCloseWithRemainingDebt` if any debt remains.
+    /// `CannotCloseWithRemainingDebt` if any debt remains. Requires owner or
+    /// delegate authorization.
     fn repay_debt_with_collateral(
         env: soroban_sdk::Env,
         caller: soroban_sdk::Address,
@@ -146,7 +150,8 @@ pub trait Controller {
     /// Migrates the caller's position from an approved `blend_pool`: borrows
     /// `debt_caps`, repays Blend and unused borrowing, then deposits withdrawn
     /// `collateral_assets` and `supply_assets`. Returns the account id;
-    /// `account_id = 0` creates it.
+    /// `account_id = 0` creates it. An existing account requires owner or
+    /// delegate authorization.
     fn migrate_from_blend(
         env: soroban_sdk::Env,
         caller: soroban_sdk::Address,
@@ -158,14 +163,16 @@ pub trait Controller {
         supply_assets: soroban_sdk::Vec<soroban_sdk::Address>,
         debt_caps: soroban_sdk::Vec<(soroban_sdk::Address, i128)>,
     ) -> u64;
-    /// Accrues pool borrow and supply indexes for `assets`.
+    /// Accrues pool borrow and supply indexes for `assets`. Permissionless;
+    /// requires caller authorization.
     fn update_indexes(
         env: soroban_sdk::Env,
         caller: soroban_sdk::Address,
         assets: soroban_sdk::Vec<HubAssetKey>,
     );
     /// Claims pool revenue and forwards measured receipts to the accumulator.
-    /// Returns those amounts in asset units, in input order.
+    /// Returns those amounts in asset units, in input order. Permissionless;
+    /// requires caller authorization.
     fn claim_revenue(
         env: soroban_sdk::Env,
         caller: soroban_sdk::Address,
@@ -182,6 +189,7 @@ pub trait Controller {
     );
     /// Covers a pool backing shortfall using measured receipts from `payer`.
     /// Refunds excess and returns the amount applied in asset units.
+    /// Permissionless; requires payer authorization.
     fn recapitalize(
         env: soroban_sdk::Env,
         payer: soroban_sdk::Address,
@@ -285,7 +293,8 @@ pub trait Controller {
     ) -> SpokeUsageRaw;
     /// Returns the configured price aggregator contract address.
     fn price_aggregator(env: soroban_sdk::Env) -> soroban_sdk::Address;
-    /// Returns the minimum collateral in USD (WAD) for a new borrow position.
+    /// Returns the LTV-weighted collateral floor in USD (WAD) for accounts with
+    /// debt; borrows, withdrawals and strategies check it. Zero disables it.
     fn get_min_borrow_collateral_usd(env: soroban_sdk::Env) -> i128;
     /// Returns whether `pool` is approved as a Blend migration source.
     fn is_blend_pool_approved(env: soroban_sdk::Env, pool: soroban_sdk::Address) -> bool;

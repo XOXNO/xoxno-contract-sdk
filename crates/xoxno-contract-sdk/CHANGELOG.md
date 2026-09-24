@@ -18,8 +18,9 @@ fixture API changed.
 - Examples: `simple-deposit`, `account-basics`, `market-picker`,
   `price-reader`, `liquidator` and `lending-vault`.
 - Clients and types for the XOXNO Lending controller, pool, position NFT and
-  price aggregator, generated from the rs-lending-xlm `v1.0.0` build that is
-  deployed on mainnet.
+  price aggregator, generated from the attested rs-lending-xlm `v1.1.0`
+  release. Each module's `WASM` is the release's deploy artifact, byte for
+  byte.
 - `FlashLoanReceiver` and `FlashPositionReceiver` callback traits.
 - Unit and limit constants, and the `approve_flash_repayment` and
   `authorize_transfer_as_current` helpers.

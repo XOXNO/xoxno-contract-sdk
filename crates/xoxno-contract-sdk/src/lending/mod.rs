@@ -1,9 +1,10 @@
 //! Clients, types and WASM for the deployed XOXNO Lending contracts.
 //!
 //! Each contract module is generated with `contractimport!` from the WASM in
-//! `wasm/`, which has the same code as the contract deployed on mainnet (see
-//! `wasm/MANIFEST.json`). A module exports its `Client`, its `WASM` bytes and
-//! every type and error in its contract spec.
+//! `wasm/`, which keeps the contract spec docs and has the same code as the
+//! contract deployed on mainnet (see `wasm/MANIFEST.json`). A module exports
+//! its `Client`, every type and error in its contract spec, and `WASM`: the
+//! deployed bytes from `wasm/deploy/`, whose hash is the mainnet WASM hash.
 //!
 //! The types of each module are separate Rust types: `controller::HubAssetKey`
 //! and `pool::HubAssetKey` do not convert into each other. Use the
@@ -34,6 +35,9 @@ pub mod controller {
     }
     pub use spec::*;
 
+    /// The deployed contract code.
+    pub const WASM: &[u8] = include_bytes!("../../wasm/deploy/controller.wasm");
+
     include!("clients/controller.rs");
 }
 
@@ -45,6 +49,9 @@ pub mod pool {
         soroban_sdk::contractimport!(file = "wasm/pool.wasm");
     }
     pub use spec::*;
+
+    /// The deployed contract code.
+    pub const WASM: &[u8] = include_bytes!("../../wasm/deploy/pool.wasm");
 
     include!("clients/pool.rs");
 }
@@ -58,6 +65,9 @@ pub mod position_nft {
     }
     pub use spec::*;
 
+    /// The deployed contract code.
+    pub const WASM: &[u8] = include_bytes!("../../wasm/deploy/position_nft.wasm");
+
     include!("clients/position_nft.rs");
 }
 
@@ -69,6 +79,9 @@ pub mod price_aggregator {
         soroban_sdk::contractimport!(file = "wasm/price_aggregator.wasm");
     }
     pub use spec::*;
+
+    /// The deployed contract code.
+    pub const WASM: &[u8] = include_bytes!("../../wasm/deploy/price_aggregator.wasm");
 
     include!("clients/price_aggregator.rs");
 }

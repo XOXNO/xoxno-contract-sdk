@@ -13,6 +13,7 @@ include = [
     "CHANGELOG.md",
     "src/**/*.rs",
     "wasm/*.wasm",
+    "wasm/deploy/*.wasm",
     "wasm/MANIFEST.json",
 ]
 edition.workspace = true

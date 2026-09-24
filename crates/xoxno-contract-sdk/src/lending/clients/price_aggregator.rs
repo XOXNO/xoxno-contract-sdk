@@ -14,8 +14,8 @@ pub trait PriceReader {
         env: soroban_sdk::Env,
         keys: soroban_sdk::Vec<PriceKey>,
     ) -> soroban_sdk::Map<PriceKey, PriceStatus>;
-    /// Resolves `key` and returns the min and max of its two leg prices as
-    /// `(low, high)`, panicking if resolution fails.
+    /// Resolves `key` and returns the min and max of its two leg prices (WAD)
+    /// as `(low, high)`, panicking if resolution fails.
     fn price_spread(env: soroban_sdk::Env, key: PriceKey) -> (i128, i128);
     /// Returns the oracle configuration registered for `key`, if any.
     fn oracle(env: soroban_sdk::Env, key: PriceKey) -> Option<AssetOracle>;
