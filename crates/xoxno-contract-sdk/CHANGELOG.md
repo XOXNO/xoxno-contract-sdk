@@ -36,7 +36,8 @@ fixture API changed.
   id only when the withdrawal closed the account.
 - README: every example is a complete item with its own imports and typed
   inputs; operations, reads, markets and prices are reference tables; the
-  testing section shows a contract and its fixture test.
+  testing section shows a contract and its fixture test. The borrow example
+  requires the stored owner's authorization before it sends borrowed tokens.
 - `scripts/check_readme.py` compiles every README example and runs its tests;
   CI runs it.
 

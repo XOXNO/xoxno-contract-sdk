@@ -135,17 +135,29 @@ Amounts are token base units. "Contract" is the current contract.
 | `flash_loan(&market, amount, &receiver, &data)` | protocol → receiver → protocol | |
 | `renew_account(account_id)` | | Extends the TTL of the account, its positions and its NFT. |
 
-Borrow for a user, and repay with the user's tokens:
+The wrapper spends the contract's tokens and borrows against the contract's
+accounts. A public entrypoint that calls it must check who may start that
+action, with an address the contract stored, not one the caller passes.
+
+Borrow for the owner, and repay with a payer's tokens:
 
 ```rust
-use soroban_sdk::{token, Address, Env};
+use soroban_sdk::{contracttype, token, Address, Env};
 use xoxno_contract_sdk::lending::controller::HubAssetKey;
 use xoxno_contract_sdk::XoxnoLending;
 
-/// Borrows `amount` of `market` against the contract's account and sends it to `to`.
-pub fn borrow_to(env: &Env, account_id: u64, market: &HubAssetKey, amount: i128, to: &Address) {
+#[contracttype]
+pub enum DataKey {
+    Owner,
+}
+
+/// Borrows `amount` of `market` against the contract's account and sends it to
+/// the owner the contract stored at construction.
+pub fn borrow_to_owner(env: &Env, account_id: u64, market: &HubAssetKey, amount: i128) {
+    let owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
+    owner.require_auth();
     XoxnoLending::mainnet(env).borrow(account_id, market, amount);
-    token::Client::new(env, &market.asset).transfer(&env.current_contract_address(), to, &amount);
+    token::Client::new(env, &market.asset).transfer(&env.current_contract_address(), &owner, &amount);
 }
 
 /// Repays up to `amount` of the account's debt in `market` with tokens from
