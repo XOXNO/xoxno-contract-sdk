@@ -4,7 +4,7 @@
 //!
 //! ```toml
 //! [dev-dependencies]
-//! xoxno-contract-sdk = { version = "0.1", features = ["testutils"] }
+//! xoxno-contract-sdk = { version = "0.2", features = ["testutils"] }
 //! ```
 //!
 //! [`LendingFixture::deploy`] builds the protocol the way mainnet runs it:

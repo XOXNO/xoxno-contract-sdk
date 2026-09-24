@@ -69,12 +69,14 @@ fn deposits_earn_interest_and_withdraw_in_full() {
 
     let grown = s.vault.balance();
     assert!(grown > 1_000 * UNIT, "balance {grown} earned no interest");
-    let withdrawn = s.vault.withdraw_all();
+    let withdrawal = s.vault.withdraw_all();
     assert!(
-        grown - withdrawn <= 1,
-        "withdrew {withdrawn}, view showed {grown}"
+        grown - withdrawal.amount <= 1,
+        "withdrew {}, view showed {grown}",
+        withdrawal.amount
     );
-    assert_eq!(s.usdc.token.balance(&s.owner), withdrawn);
+    assert!(withdrawal.account_closed);
+    assert_eq!(s.usdc.token.balance(&s.owner), withdrawal.amount);
 }
 
 #[test]

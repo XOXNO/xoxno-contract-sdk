@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Compile every `rust` block of the crate README and run its tests.
+"""Compile every `rust` and `rust,ignore` block of the crate README and run its tests.
 
 Each block becomes one module of a throwaway no_std crate in
 target/readme-check that depends on this crate with `testutils`. A block must
 therefore be complete: its own imports, items only, no undefined names.
+A block with `#[test]` is fenced `rust,ignore`, because clippy rejects a test
+in a doctest.
 
 Usage: check_readme.py
 """
@@ -35,7 +37,7 @@ soroban-sdk = {{ version = "28.0.0", features = ["testutils"] }}
 
 
 def main() -> int:
-    blocks = re.findall(r"^```rust\n(.*?)^```$", README.read_text(), flags=re.M | re.S)
+    blocks = re.findall(r"^```rust(?:,ignore)?\n(.*?)^```$", README.read_text(), flags=re.M | re.S)
     if not blocks:
         sys.exit("check_readme: no rust blocks in README.md")
     (CRATE / "src").mkdir(parents=True, exist_ok=True)

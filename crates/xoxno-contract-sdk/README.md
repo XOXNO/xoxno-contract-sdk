@@ -16,11 +16,11 @@ local deployment of the protocol.
 ```toml
 [dependencies]
 soroban-sdk = "28"
-xoxno-contract-sdk = "0.1"
+xoxno-contract-sdk = "0.2"
 
 [dev-dependencies]
 soroban-sdk = { version = "28", features = ["testutils"] }
-xoxno-contract-sdk = { version = "0.1", features = ["testutils"] }
+xoxno-contract-sdk = { version = "0.2", features = ["testutils"] }
 ```
 
 Build contracts with `stellar contract build` (stellar-cli 25.2 or later). The
@@ -81,14 +81,16 @@ spoke of an existing account.
 ## Keep one account
 
 A contract that holds a single account stores its id. The protocol deletes an
-account, and burns its NFT, when a withdrawal leaves it with no supply and no
-debt. `resolve_account` returns the stored id if the account still exists, and
-0 otherwise, so the next deposit opens a new account.
+account, and burns its NFT, when a withdrawal or a strategy call leaves it with
+no supply and no debt. A repayment never deletes an account. `withdraw` and `withdraw_all` report this in `Withdrawal::account_closed`,
+which the wrapper reads from the position NFT: the NFT no longer exists.
+`resolve_account` returns the stored id if the account still exists, and 0
+otherwise, so the next deposit opens a new account.
 
 ```rust
 use soroban_sdk::{contracttype, Env};
 use xoxno_contract_sdk::lending::controller::HubAssetKey;
-use xoxno_contract_sdk::XoxnoLending;
+use xoxno_contract_sdk::{Withdrawal, XoxnoLending};
 
 #[contracttype]
 pub enum DataKey {
@@ -104,6 +106,16 @@ pub fn supply(env: &Env, spoke_id: u32, market: &HubAssetKey, amount: i128) -> u
     env.storage().instance().set(&DataKey::Account, &account_id);
     account_id
 }
+
+/// Withdraws the whole supply of `market` to the current contract. Forgets the
+/// account id when the withdrawal closed the account and burned its NFT.
+pub fn withdraw_all(env: &Env, account_id: u64, market: &HubAssetKey) -> Withdrawal {
+    let withdrawal = XoxnoLending::mainnet(env).withdraw_all(account_id, market);
+    if withdrawal.account_closed {
+        env.storage().instance().remove(&DataKey::Account);
+    }
+    withdrawal
+}
 ```
 
 ## Operations
@@ -116,9 +128,9 @@ Amounts are token base units. "Contract" is the current contract.
 | `open_account(spoke_id, &market, amount)` | contract → protocol | New account id |
 | `supply(account_id, &market, amount)` | contract → protocol | Account id |
 | `borrow(account_id, &market, amount)` | protocol → contract | |
-| `repay(account_id, &market, amount)` | contract → protocol | The pool refunds any amount above the debt. |
-| `withdraw(account_id, &market, amount)` | protocol → contract | Amount received |
-| `withdraw_all(account_id, &market)` | protocol → contract | Amount received |
+| `repay(account_id, &market, amount)` | contract → protocol | Amount repaid. The pool refunds any amount above the debt to the contract. |
+| `withdraw(account_id, &market, amount)` | protocol → contract | `Withdrawal { amount, account_closed }`. `account_closed`: the account was deleted and its NFT burned. |
+| `withdraw_all(account_id, &market)` | protocol → contract | `Withdrawal`, as `withdraw` |
 | `liquidate(account_id, &market, amount)` | contract → protocol, seized collateral → contract | Amount paid |
 | `flash_loan(&market, amount, &receiver, &data)` | protocol → receiver → protocol | |
 | `renew_account(account_id)` | | Extends the TTL of the account, its positions and its NFT. |
@@ -136,11 +148,18 @@ pub fn borrow_to(env: &Env, account_id: u64, market: &HubAssetKey, amount: i128,
     token::Client::new(env, &market.asset).transfer(&env.current_contract_address(), to, &amount);
 }
 
-/// Takes `amount` of `market` from `from` and repays the account's debt with it.
-pub fn repay_from(env: &Env, account_id: u64, market: &HubAssetKey, amount: i128, from: &Address) {
+/// Repays up to `amount` of the account's debt in `market` with tokens from
+/// `from`, sends the part above the debt back, and returns the amount repaid.
+pub fn repay_from(env: &Env, account_id: u64, market: &HubAssetKey, amount: i128, from: &Address) -> i128 {
     from.require_auth();
-    token::Client::new(env, &market.asset).transfer(from, env.current_contract_address(), &amount);
-    XoxnoLending::mainnet(env).repay(account_id, market, amount);
+    let this = env.current_contract_address();
+    let token = token::Client::new(env, &market.asset);
+    token.transfer(from, &this, &amount);
+    let repaid = XoxnoLending::mainnet(env).repay(account_id, market, amount);
+    if repaid < amount {
+        token.transfer(&this, from, &(amount - repaid));
+    }
+    repaid
 }
 ```
 
@@ -157,7 +176,7 @@ pub fn repay_from(env: &Env, account_id: u64, market: &HubAssetKey, amount: i128
 | `account_exists(account_id)`, `owns(account_id)`, `owner_of(account_id)`, `account_spoke(account_id)` | Existence, ownership by the contract, owner, spoke |
 | `account_count(&owner)`, `accounts_of(&owner, start, limit)` | Accounts held by `owner` |
 
-`withdraw_all` pays the floored claim, so it can return 1 unit less than
+`withdraw_all` pays the floored claim, so its `amount` can be 1 unit less than
 `collateral`.
 
 ## Choose a market
@@ -235,9 +254,9 @@ pub fn liquidate(env: &Env, account_id: u64, debt_market: &HubAssetKey, max_repa
 }
 ```
 
-The controller can use less than `max_repay`. `liquidate` reads the same plan
-first (`liquidation_estimate`) and authorizes exactly the amount the controller
-takes. The seized collateral goes to the contract.
+The controller can use less than `max_repay`. `liquidate` reads the plan first
+(`liquidation_estimate`), then offers and authorizes only the planned amount.
+The rest stays in the contract, and the seized collateral goes to it.
 
 ## Flash loans
 
@@ -332,7 +351,7 @@ constructor argument instead of calling `XoxnoLending::mainnet`. Deploy it
 with `LendingAddresses::mainnet(&env)` on mainnet and `fixture.addresses()` in
 tests.
 
-```rust
+```rust,ignore
 use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env};
 use xoxno_contract_sdk::{LendingAddresses, XoxnoLending};
 
@@ -463,9 +482,10 @@ those hashes with the live mainnet contracts.
 
 | xoxno-contract-sdk | soroban-sdk | rs-lending-xlm |
 |---|---|---|
-| 0.1.x | 28 | v1.1.0 (`1053ae033`) |
+| 0.1.x, 0.2.x | 28 | v1.1.0 (`1053ae033`) |
 
-0.1.0 was published before the mainnet upgrade to rs-lending-xlm v1.1.0.
+0.1.0 and 0.2.0 were published before the mainnet upgrade to rs-lending-xlm
+v1.1.0.
 
 ## License
 

@@ -1,10 +1,13 @@
-use soroban_sdk::{contracttype, panic_with_error, vec, Address, Bytes, Env, Vec, I256};
+use soroban_sdk::{
+    contracttype, panic_with_error, token, vec, Address, Bytes, Env, Error, Vec, I256,
+};
 
 use super::constants::{NEW_ACCOUNT, WITHDRAW_ALL};
 use super::controller::{
     self, GenericError, HubAssetKey, LiquidationEstimate, SeizeMode, SpokeAssetConfig, SpokeConfig,
 };
 use super::helpers::authorize_transfer_as_current;
+use super::position_nft::NonFungibleTokenError;
 use super::{pool, position_nft, price_aggregator};
 use crate::networks;
 
@@ -46,6 +49,18 @@ pub struct Position {
     pub collateral: Vec<(HubAssetKey, i128)>,
     /// Borrowed amount per market, interest included.
     pub debt: Vec<(HubAssetKey, i128)>,
+}
+
+/// The result of a withdrawal.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Withdrawal {
+    /// Token base units the current contract received.
+    pub amount: i128,
+    /// The withdrawal left the account with no supply and no debt: the
+    /// protocol deleted the account and burned its position NFT. The id is
+    /// no longer valid.
+    pub account_closed: bool,
 }
 
 /// XOXNO Lending as the calling contract sees it.
@@ -143,8 +158,9 @@ impl XoxnoLending {
     }
 
     /// Returns `stored` if that account still exists, otherwise
-    /// [`NEW_ACCOUNT`]. A full withdrawal or repayment that leaves an account
-    /// empty deletes it and burns its NFT, so check a stored id before reuse.
+    /// [`NEW_ACCOUNT`]. A withdrawal or a strategy call that leaves an account
+    /// with no supply and no debt deletes it and burns its NFT, so check a
+    /// stored id before reuse. A repayment never deletes an account.
     pub fn resolve_account(&self, stored: Option<u64>) -> u64 {
         match stored {
             Some(account_id) if self.controller().account_exists(&account_id) => account_id,
@@ -163,10 +179,14 @@ impl XoxnoLending {
         );
     }
 
-    /// Repays `amount` of the account's debt in `market` from the current
-    /// contract. The pool refunds any amount above the debt.
-    pub fn repay(&self, account_id: u64, market: &HubAssetKey, amount: i128) {
+    /// Repays up to `amount` of the account's debt in `market` from the
+    /// current contract, and returns the amount repaid. The pool refunds any
+    /// amount above the debt to the current contract; the return value
+    /// excludes that refund.
+    pub fn repay(&self, account_id: u64, market: &HubAssetKey, amount: i128) -> i128 {
         let this = self.env.current_contract_address();
+        let token = token::TokenClient::new(&self.env, &market.asset);
+        let before = token.balance(&this);
         authorize_transfer_as_current(
             &self.env,
             &market.asset,
@@ -179,23 +199,27 @@ impl XoxnoLending {
             &account_id,
             &vec![&self.env, (market.clone(), amount)],
         );
+        before - token.balance(&this)
     }
 
-    /// Withdraws `amount` of `market` to the current contract and returns the
-    /// amount withdrawn.
-    pub fn withdraw(&self, account_id: u64, market: &HubAssetKey, amount: i128) -> i128 {
+    /// Withdraws `amount` of `market` to the current contract. The result has
+    /// the amount received and whether the withdrawal closed the account.
+    pub fn withdraw(&self, account_id: u64, market: &HubAssetKey, amount: i128) -> Withdrawal {
         let withdrawn = self.controller().withdraw(
             &self.env.current_contract_address(),
             &account_id,
             &vec![&self.env, (market.clone(), amount)],
             &None,
         );
-        withdrawn.iter().map(|(_, value)| value).sum()
+        Withdrawal {
+            amount: withdrawn.iter().map(|(_, value)| value).sum(),
+            account_closed: self.nft_burned(account_id),
+        }
     }
 
-    /// Withdraws the whole supply of `market` and returns the amount. It can be
-    /// 1 unit below [`collateral`](Self::collateral), which rounds half-up.
-    pub fn withdraw_all(&self, account_id: u64, market: &HubAssetKey) -> i128 {
+    /// Withdraws the whole supply of `market`. The amount can be 1 unit below
+    /// [`collateral`](Self::collateral), which rounds half-up.
+    pub fn withdraw_all(&self, account_id: u64, market: &HubAssetKey) -> Withdrawal {
         self.withdraw(account_id, market, WITHDRAW_ALL)
     }
 
@@ -221,8 +245,9 @@ impl XoxnoLending {
     /// `market` from the current contract, and returns the amount paid. The
     /// seized collateral goes to the current contract.
     ///
-    /// The controller can use less than `amount`; this reads the same plan
-    /// with `get_liquidation_estimate` first to authorize the exact transfer.
+    /// The controller can use less than `amount`. This reads the plan with
+    /// `get_liquidation_estimate` first, then offers and authorizes only the
+    /// planned amount.
     pub fn liquidate(&self, account_id: u64, market: &HubAssetKey, amount: i128) -> i128 {
         let payments = vec![&self.env, (market.clone(), amount)];
         let estimate = self.controller().get_liquidation_estimate(
@@ -247,8 +272,12 @@ impl XoxnoLending {
                 paid,
             );
         }
-        self.controller()
-            .liquidate(&this, &account_id, &payments, &SeizeMode::Transfer);
+        self.controller().liquidate(
+            &this,
+            &account_id,
+            &vec![&self.env, (market.clone(), paid)],
+            &SeizeMode::Transfer,
+        );
         paid
     }
 
@@ -525,6 +554,18 @@ fn pool_key(market: &HubAssetKey) -> pool::HubAssetKey {
     pool::HubAssetKey {
         asset: market.asset.clone(),
         hub_id: market.hub_id,
+    }
+}
+
+impl XoxnoLending {
+    /// Whether the account's position NFT no longer exists: `owner_of` fails
+    /// with `NonExistentToken`. Any other failure is not a burn.
+    fn nft_burned(&self, account_id: u64) -> bool {
+        let missing = Error::from_contract_error(NonFungibleTokenError::NonExistentToken as u32);
+        matches!(
+            self.position_nft().try_owner_of(&nft_id(&self.env, account_id)),
+            Err(Ok(error)) if error == missing
+        )
     }
 }
 

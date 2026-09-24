@@ -11,7 +11,7 @@ use xoxno_contract_sdk::lending::constants::NEW_ACCOUNT;
 use xoxno_contract_sdk::lending::controller::HubAssetKey;
 use xoxno_contract_sdk::lending::helpers::approve_flash_repayment;
 use xoxno_contract_sdk::lending::FlashLoanReceiver;
-use xoxno_contract_sdk::{LendingAddresses, XoxnoLending};
+use xoxno_contract_sdk::{LendingAddresses, Withdrawal, XoxnoLending};
 
 const INSTANCE_TTL_THRESHOLD: u32 = 518_400;
 const INSTANCE_TTL_EXTEND_TO: u32 = 3_110_400;
@@ -85,19 +85,23 @@ impl LendingVault {
         account_id
     }
 
-    /// Withdraws the whole position, interest included, to the owner.
-    pub fn withdraw_all(env: Env) -> i128 {
+    /// Withdraws the whole position, interest included, to the owner. When
+    /// the withdrawal closes the account (its NFT is burned), the vault
+    /// forgets the account id.
+    pub fn withdraw_all(env: Env) -> Withdrawal {
         let cfg = config(&env);
         cfg.owner.require_auth();
         let lending = XoxnoLending::new(&env, &cfg.lending);
-        let withdrawn = lending.withdraw_all(account(&env), &cfg.market);
-        env.storage().instance().remove(&Key::Account);
+        let withdrawal = lending.withdraw_all(account(&env), &cfg.market);
+        if withdrawal.account_closed {
+            env.storage().instance().remove(&Key::Account);
+        }
         token::Client::new(&env, &cfg.market.asset).transfer(
             &env.current_contract_address(),
             &cfg.owner,
-            &withdrawn,
+            &withdrawal.amount,
         );
-        withdrawn
+        withdrawal
     }
 
     /// Value of the vault's position in the market token, interest included.

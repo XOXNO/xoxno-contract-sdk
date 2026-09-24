@@ -13,7 +13,7 @@ use soroban_sdk::{
 };
 use xoxno_contract_sdk::lending::constants::NEW_ACCOUNT;
 use xoxno_contract_sdk::lending::controller::HubAssetKey;
-use xoxno_contract_sdk::{LendingAddresses, Position, XoxnoLending};
+use xoxno_contract_sdk::{LendingAddresses, Position, Withdrawal, XoxnoLending};
 
 #[contracttype]
 #[derive(Clone)]
@@ -96,27 +96,38 @@ impl AccountBasics {
         );
     }
 
-    /// Repays `amount` of the debt in `market`, paid by the owner.
-    pub fn repay(env: Env, market: HubAssetKey, amount: i128) {
+    /// Repays up to `amount` of the debt in `market`, paid by the owner, and
+    /// returns the amount repaid. The part above the debt goes back to the
+    /// owner.
+    pub fn repay(env: Env, market: HubAssetKey, amount: i128) -> i128 {
         let cfg = config(&env);
         cfg.owner.require_auth();
         let this = env.current_contract_address();
-        token::Client::new(&env, &market.asset).transfer(&cfg.owner, &this, &amount);
-        XoxnoLending::new(&env, &cfg.lending).repay(account(&env), &market, amount);
+        let token = token::Client::new(&env, &market.asset);
+        token.transfer(&cfg.owner, &this, &amount);
+        let repaid = XoxnoLending::new(&env, &cfg.lending).repay(account(&env), &market, amount);
+        if repaid < amount {
+            token.transfer(&this, &cfg.owner, &(amount - repaid));
+        }
+        repaid
     }
 
-    /// Withdraws the whole supply to the owner and returns the amount.
-    pub fn withdraw_all(env: Env) -> i128 {
+    /// Withdraws the whole supply to the owner. When the withdrawal closes
+    /// the account (its NFT is burned), the contract forgets the account id.
+    pub fn withdraw_all(env: Env) -> Withdrawal {
         let cfg = config(&env);
         cfg.owner.require_auth();
         let lending = XoxnoLending::new(&env, &cfg.lending);
-        let withdrawn = lending.withdraw_all(account(&env), &cfg.market);
+        let withdrawal = lending.withdraw_all(account(&env), &cfg.market);
+        if withdrawal.account_closed {
+            env.storage().instance().remove(&Key::Account);
+        }
         token::Client::new(&env, &cfg.market.asset).transfer(
             &env.current_contract_address(),
             &cfg.owner,
-            &withdrawn,
+            &withdrawal.amount,
         );
-        withdrawn
+        withdrawal
     }
 
     /// The stored account id, if the contract has opened one.
