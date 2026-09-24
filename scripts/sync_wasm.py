@@ -71,6 +71,7 @@ def from_release(tag: str) -> tuple[dict, dict, dict]:
     with tempfile.TemporaryDirectory() as tmp:
         run("gh", "release", "download", tag, "-R", REPO, "-D", tmp, "-p", "sdk-*")
         out = pathlib.Path(tmp)
+        run("gh", "attestation", "verify", str(out / "sdk-manifest.json"), "--repo", REPO)
         manifest = json.loads((out / "sdk-manifest.json").read_text())
         files, deploy = {}, {}
         for name in CONTRACTS + list(MOCKS):
