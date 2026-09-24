@@ -6,6 +6,24 @@ All notable changes to this crate are recorded here. The format follows
 means the embedded WASM, the ABI, the `soroban-sdk` major version or the
 fixture API changed.
 
+## [0.2.1] - 2026-09-24
+
+### Added
+
+- Batch operations on several markets in one controller call:
+  `deposit_batch`, `supply_batch`, `borrow_batch`, `repay_batch` (amount
+  repaid per market), `withdraw_batch` (`Withdrawals { amounts,
+  account_closed }`) and `liquidate_batch` (amount paid per market). A market
+  listed twice is merged as the controller merges it. `repay_batch` and
+  `liquidate_batch` take one market per token and panic with
+  `InvalidPayments` otherwise.
+- `lending::helpers::authorize_transfers_as_current`: one transfer
+  authorization per `(token, amount)` for the next call.
+
+### Changed
+
+- The single-market operations call their batch forms with one market.
+
 ## [0.2.0] - 2026-09-24
 
 ### Added

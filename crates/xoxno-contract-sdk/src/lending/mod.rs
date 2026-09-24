@@ -20,7 +20,7 @@ pub mod constants;
 mod facade;
 pub mod helpers;
 
-pub use facade::{LendingAddresses, Position, Withdrawal, XoxnoLending};
+pub use facade::{LendingAddresses, Position, Withdrawal, Withdrawals, XoxnoLending};
 
 pub use callbacks::{
     FlashLoanReceiver, FlashLoanReceiverClient, FlashPositionReceiver, FlashPositionReceiverClient,

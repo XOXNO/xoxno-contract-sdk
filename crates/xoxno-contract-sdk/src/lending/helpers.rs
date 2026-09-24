@@ -32,15 +32,42 @@ pub fn authorize_transfer_as_current(
     to: &Address,
     amount: i128,
 ) {
-    env.authorize_as_current_contract(vec![
-        env,
-        InvokerContractAuthEntry::Contract(SubContractInvocation {
-            context: ContractContext {
-                contract: token.clone(),
-                fn_name: symbol_short!("transfer"),
-                args: (from.clone(), to.clone(), amount).into_val(env),
-            },
-            sub_invocations: Vec::new(env),
-        }),
-    ]);
+    env.authorize_as_current_contract(vec![env, transfer_entry(env, token, from, to, amount)]);
+}
+
+/// Authorizes one `transfer(from, to, amount)` per `(token, amount)` of
+/// `transfers` inside the next call the current contract makes.
+///
+/// Use it before a controller call that pulls several tokens, such as a
+/// `supply` or `repay` with several markets. The controller makes one
+/// transfer per distinct market, in request order; each entry matches one
+/// transfer, so two equal transfers need two entries.
+pub fn authorize_transfers_as_current(
+    env: &Env,
+    from: &Address,
+    to: &Address,
+    transfers: &Vec<(Address, i128)>,
+) {
+    let mut entries = Vec::new(env);
+    for (token, amount) in transfers.iter() {
+        entries.push_back(transfer_entry(env, &token, from, to, amount));
+    }
+    env.authorize_as_current_contract(entries);
+}
+
+fn transfer_entry(
+    env: &Env,
+    token: &Address,
+    from: &Address,
+    to: &Address,
+    amount: i128,
+) -> InvokerContractAuthEntry {
+    InvokerContractAuthEntry::Contract(SubContractInvocation {
+        context: ContractContext {
+            contract: token.clone(),
+            fn_name: symbol_short!("transfer"),
+            args: (from.clone(), to.clone(), amount).into_val(env),
+        },
+        sub_invocations: Vec::new(env),
+    })
 }

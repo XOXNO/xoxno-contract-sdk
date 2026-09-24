@@ -135,6 +135,9 @@ Amounts are token base units. "Contract" is the current contract.
 | `flash_loan(&market, amount, &receiver, &data)` | protocol → receiver → protocol | |
 | `renew_account(account_id)` | | Extends the TTL of the account, its positions and its NFT. |
 
+Each operation that moves tokens also has a `_batch` form for several markets
+in one call; see [Batches](#batches).
+
 The wrapper spends the contract's tokens and borrows against the contract's
 accounts. A public entrypoint that calls it must check who may start that
 action, with an address the contract stored, not one the caller passes.
@@ -170,6 +173,65 @@ pub fn repay_from(env: &Env, account_id: u64, market: &HubAssetKey, amount: i128
     let repaid = XoxnoLending::mainnet(env).repay(account_id, market, amount);
     if repaid < amount {
         token.transfer(&this, from, &(amount - repaid));
+    }
+    repaid
+}
+```
+
+## Batches
+
+The `_batch` methods take `&Vec<(HubAssetKey, i128)>` and act on several
+markets in one controller call.
+
+| Method | Returns |
+|---|---|
+| `deposit_batch(account_id, spoke_id, &assets)` | Account id. Opens an account when `account_id` is 0. |
+| `supply_batch(account_id, &assets)` | Account id |
+| `borrow_batch(account_id, &assets)` | |
+| `repay_batch(account_id, &payments)` | Amount repaid per market |
+| `withdraw_batch(account_id, &assets)` | `Withdrawals { amounts, account_closed }`: amount received per market |
+| `liquidate_batch(account_id, &payments)` | Amount paid per market the plan uses |
+
+- A market listed twice is merged, as the controller does: its amounts are
+  summed, and for `withdraw_batch` a `WITHDRAW_ALL` (0) wins. Results have one
+  entry per market, in request order.
+- `repay_batch` and `liquidate_batch` take one market per token, because the
+  refunds and the liquidation plan are reported per token. A token listed in
+  two hubs needs two calls; otherwise the call panics with
+  `GenericError::InvalidPayments`.
+- The paying batches authorize one exact transfer per market
+  (`lending::helpers::authorize_transfers_as_current`).
+
+Repay several debts with a payer's tokens, and return each refund:
+
+```rust
+use soroban_sdk::{token, Address, Env, Vec};
+use xoxno_contract_sdk::lending::controller::HubAssetKey;
+use xoxno_contract_sdk::XoxnoLending;
+
+/// Repays up to each `(market, amount)` of `payments` with tokens from `from`,
+/// sends the part above each debt back, and returns the amount repaid per market.
+pub fn repay_batch_from(
+    env: &Env,
+    account_id: u64,
+    payments: &Vec<(HubAssetKey, i128)>,
+    from: &Address,
+) -> Vec<(HubAssetKey, i128)> {
+    from.require_auth();
+    let this = env.current_contract_address();
+    for (market, amount) in payments.iter() {
+        token::Client::new(env, &market.asset).transfer(from, &this, &amount);
+    }
+    let repaid = XoxnoLending::mainnet(env).repay_batch(account_id, payments);
+    for (market, repaid_amount) in repaid.iter() {
+        let sent: i128 = payments
+            .iter()
+            .filter(|(paid_market, _)| *paid_market == market)
+            .map(|(_, amount)| amount)
+            .sum();
+        if repaid_amount < sent {
+            token::Client::new(env, &market.asset).transfer(&this, from, &(sent - repaid_amount));
+        }
     }
     repaid
 }
@@ -269,6 +331,7 @@ pub fn liquidate(env: &Env, account_id: u64, debt_market: &HubAssetKey, max_repa
 The controller can use less than `max_repay`. `liquidate` reads the plan first
 (`liquidation_estimate`), then offers and authorizes only the planned amount.
 The rest stays in the contract, and the seized collateral goes to it.
+`liquidate_batch` does the same with offers in several debt markets.
 
 ## Flash loans
 

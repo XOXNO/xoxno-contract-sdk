@@ -6,7 +6,7 @@ use super::constants::{NEW_ACCOUNT, WITHDRAW_ALL};
 use super::controller::{
     self, GenericError, HubAssetKey, LiquidationEstimate, SeizeMode, SpokeAssetConfig, SpokeConfig,
 };
-use super::helpers::authorize_transfer_as_current;
+use super::helpers::authorize_transfers_as_current;
 use super::position_nft::NonFungibleTokenError;
 use super::{pool, position_nft, price_aggregator};
 use crate::networks;
@@ -63,12 +63,24 @@ pub struct Withdrawal {
     pub account_closed: bool,
 }
 
+/// The result of a batch withdrawal.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Withdrawals {
+    /// Token base units the current contract received per market, one entry
+    /// per market in request order.
+    pub amounts: Vec<(HubAssetKey, i128)>,
+    /// As [`Withdrawal::account_closed`].
+    pub account_closed: bool,
+}
+
 /// XOXNO Lending as the calling contract sees it.
 ///
 /// Every operation acts for the current contract: it is the caller, it pays,
 /// and it receives. The account it opens is a position NFT that the current
-/// contract owns. Methods that pay (`open_account`, `supply`, `repay`,
-/// `liquidate`) create the token-transfer authorization the controller needs.
+/// contract owns. Methods that pay (`deposit`, `supply`, `repay`, `liquidate`
+/// and their `_batch` forms) create the token-transfer authorizations the
+/// controller needs. Each `_batch` method acts on several markets in one call.
 ///
 /// Amounts are token base units. USD values and prices are WAD (1e18). Rates
 /// and indexes are RAY (1e27). For a function this type does not wrap, use the
@@ -131,7 +143,7 @@ impl XoxnoLending {
     /// returns its id. The id is the position NFT's token id, and the current
     /// contract owns the NFT. Store the id to reuse the account.
     pub fn open_account(&self, spoke_id: u32, market: &HubAssetKey, amount: i128) -> u64 {
-        self.supply_to(NEW_ACCOUNT, spoke_id, market, amount)
+        self.deposit(NEW_ACCOUNT, spoke_id, market, amount)
     }
 
     /// Supplies `amount` of `market` to `account_id` and returns the account
@@ -145,16 +157,41 @@ impl XoxnoLending {
         market: &HubAssetKey,
         amount: i128,
     ) -> u64 {
-        self.supply_to(account_id, spoke_id, market, amount)
+        self.deposit_batch(
+            account_id,
+            spoke_id,
+            &vec![&self.env, (market.clone(), amount)],
+        )
+    }
+
+    /// [`deposit`](Self::deposit) for several markets in one call. A market
+    /// listed twice is supplied once with the sum.
+    pub fn deposit_batch(
+        &self,
+        account_id: u64,
+        spoke_id: u32,
+        assets: &Vec<(HubAssetKey, i128)>,
+    ) -> u64 {
+        let assets = merge(&self.env, assets);
+        self.authorize_pulls(&assets);
+        self.controller().supply(
+            &self.env.current_contract_address(),
+            &account_id,
+            &spoke_id,
+            &assets,
+        )
     }
 
     /// Supplies `amount` more to an existing account of the current contract.
     pub fn supply(&self, account_id: u64, market: &HubAssetKey, amount: i128) -> u64 {
-        let spoke_id = self
-            .controller()
-            .get_account_attributes(&account_id)
-            .spoke_id;
-        self.supply_to(account_id, spoke_id, market, amount)
+        self.supply_batch(account_id, &vec![&self.env, (market.clone(), amount)])
+    }
+
+    /// [`supply`](Self::supply) for several markets in one call. A market
+    /// listed twice is supplied once with the sum.
+    pub fn supply_batch(&self, account_id: u64, assets: &Vec<(HubAssetKey, i128)>) -> u64 {
+        let spoke_id = self.account_spoke(account_id);
+        self.deposit_batch(account_id, spoke_id, assets)
     }
 
     /// Returns `stored` if that account still exists, otherwise
@@ -171,10 +208,16 @@ impl XoxnoLending {
     /// Borrows `amount` of `market` against the account; the current contract
     /// receives the tokens.
     pub fn borrow(&self, account_id: u64, market: &HubAssetKey, amount: i128) {
+        self.borrow_batch(account_id, &vec![&self.env, (market.clone(), amount)]);
+    }
+
+    /// [`borrow`](Self::borrow) for several markets in one call. A market
+    /// listed twice is borrowed once with the sum.
+    pub fn borrow_batch(&self, account_id: u64, assets: &Vec<(HubAssetKey, i128)>) {
         self.controller().borrow(
             &self.env.current_contract_address(),
             &account_id,
-            &vec![&self.env, (market.clone(), amount)],
+            assets,
             &None,
         );
     }
@@ -184,36 +227,46 @@ impl XoxnoLending {
     /// amount above the debt to the current contract; the return value
     /// excludes that refund.
     pub fn repay(&self, account_id: u64, market: &HubAssetKey, amount: i128) -> i128 {
+        self.repay_batch(account_id, &vec![&self.env, (market.clone(), amount)])
+            .get(0)
+            .map_or(0, |(_, repaid)| repaid)
+    }
+
+    /// [`repay`](Self::repay) for several markets in one call. Returns the
+    /// amount repaid per market, in request order. A market listed twice is
+    /// repaid once with the sum. Each token can appear in only one market,
+    /// because the refund is measured per token; otherwise it panics with
+    /// `InvalidPayments`.
+    pub fn repay_batch(
+        &self,
+        account_id: u64,
+        payments: &Vec<(HubAssetKey, i128)>,
+    ) -> Vec<(HubAssetKey, i128)> {
         let this = self.env.current_contract_address();
-        let token = token::TokenClient::new(&self.env, &market.asset);
-        let before = token.balance(&this);
-        authorize_transfer_as_current(
-            &self.env,
-            &market.asset,
-            &this,
-            &self.addresses.pool,
-            amount,
-        );
-        self.controller().repay(
-            &this,
-            &account_id,
-            &vec![&self.env, (market.clone(), amount)],
-        );
-        before - token.balance(&this)
+        let payments = merge(&self.env, payments);
+        require_one_market_per_token(&self.env, &payments);
+        let mut before = Vec::new(&self.env);
+        for (market, _) in payments.iter() {
+            before.push_back(token::TokenClient::new(&self.env, &market.asset).balance(&this));
+        }
+        self.authorize_pulls(&payments);
+        self.controller().repay(&this, &account_id, &payments);
+        let mut repaid = Vec::new(&self.env);
+        for (index, (market, _)) in payments.iter().enumerate() {
+            let after = token::TokenClient::new(&self.env, &market.asset).balance(&this);
+            repaid.push_back((market, before.get_unchecked(index as u32) - after));
+        }
+        repaid
     }
 
     /// Withdraws `amount` of `market` to the current contract. The result has
     /// the amount received and whether the withdrawal closed the account.
     pub fn withdraw(&self, account_id: u64, market: &HubAssetKey, amount: i128) -> Withdrawal {
-        let withdrawn = self.controller().withdraw(
-            &self.env.current_contract_address(),
-            &account_id,
-            &vec![&self.env, (market.clone(), amount)],
-            &None,
-        );
+        let withdrawals =
+            self.withdraw_batch(account_id, &vec![&self.env, (market.clone(), amount)]);
         Withdrawal {
-            amount: withdrawn.iter().map(|(_, value)| value).sum(),
-            account_closed: self.nft_burned(account_id),
+            amount: withdrawals.amounts.iter().map(|(_, amount)| amount).sum(),
+            account_closed: withdrawals.account_closed,
         }
     }
 
@@ -221,6 +274,27 @@ impl XoxnoLending {
     /// [`collateral`](Self::collateral), which rounds half-up.
     pub fn withdraw_all(&self, account_id: u64, market: &HubAssetKey) -> Withdrawal {
         self.withdraw(account_id, market, WITHDRAW_ALL)
+    }
+
+    /// [`withdraw`](Self::withdraw) for several markets in one call.
+    /// [`WITHDRAW_ALL`] withdraws the whole supply of its market. A market
+    /// listed twice is withdrawn once with the sum, or in full if either
+    /// amount is [`WITHDRAW_ALL`].
+    pub fn withdraw_batch(
+        &self,
+        account_id: u64,
+        assets: &Vec<(HubAssetKey, i128)>,
+    ) -> Withdrawals {
+        let amounts = self.controller().withdraw(
+            &self.env.current_contract_address(),
+            &account_id,
+            assets,
+            &None,
+        );
+        Withdrawals {
+            amounts,
+            account_closed: self.nft_burned(account_id),
+        }
     }
 
     /// Extends the TTL of the account, its positions and its NFT.
@@ -249,36 +323,47 @@ impl XoxnoLending {
     /// `get_liquidation_estimate` first, then offers and authorizes only the
     /// planned amount.
     pub fn liquidate(&self, account_id: u64, market: &HubAssetKey, amount: i128) -> i128 {
-        let payments = vec![&self.env, (market.clone(), amount)];
-        let estimate = self.controller().get_liquidation_estimate(
-            &account_id,
-            &payments,
-            &SeizeMode::Transfer,
-        );
-        let refund: i128 = estimate
-            .refunds
-            .iter()
-            .filter(|refund| refund.asset == market.asset)
-            .map(|refund| refund.amount)
-            .sum();
-        let paid = amount - refund;
-        let this = self.env.current_contract_address();
-        if paid > 0 {
-            authorize_transfer_as_current(
-                &self.env,
-                &market.asset,
-                &this,
-                &self.addresses.pool,
-                paid,
-            );
+        self.liquidate_batch(account_id, &vec![&self.env, (market.clone(), amount)])
+            .get(0)
+            .map_or(0, |(_, paid)| paid)
+    }
+
+    /// [`liquidate`](Self::liquidate) with offers in several debt markets in
+    /// one call. Returns the amount paid per market, for the markets the plan
+    /// uses, in request order. A market listed twice is offered once with the
+    /// sum. Each token can appear in only one market, because the plan reports
+    /// refunds per token; otherwise it panics with `InvalidPayments`.
+    pub fn liquidate_batch(
+        &self,
+        account_id: u64,
+        payments: &Vec<(HubAssetKey, i128)>,
+    ) -> Vec<(HubAssetKey, i128)> {
+        let offers = merge(&self.env, payments);
+        require_one_market_per_token(&self.env, &offers);
+        let estimate =
+            self.controller()
+                .get_liquidation_estimate(&account_id, &offers, &SeizeMode::Transfer);
+        let mut planned = Vec::new(&self.env);
+        for (market, offer) in offers.iter() {
+            let refund: i128 = estimate
+                .refunds
+                .iter()
+                .filter(|refund| refund.asset == market.asset)
+                .map(|refund| refund.amount)
+                .sum();
+            let paid = offer - refund;
+            if paid > 0 {
+                planned.push_back((market, paid));
+            }
         }
+        self.authorize_pulls(&planned);
         self.controller().liquidate(
-            &this,
+            &self.env.current_contract_address(),
             &account_id,
-            &vec![&self.env, (market.clone(), paid)],
+            &planned,
             &SeizeMode::Transfer,
         );
-        paid
+        planned
     }
 
     // ----- Account views ------------------------------------------------------
@@ -531,22 +616,52 @@ impl XoxnoLending {
             .get(key)
             .unwrap_or_else(|| panic!("no price for the asset"))
     }
+}
 
-    fn supply_to(&self, account_id: u64, spoke_id: u32, market: &HubAssetKey, amount: i128) -> u64 {
-        let this = self.env.current_contract_address();
-        authorize_transfer_as_current(
+impl XoxnoLending {
+    /// Authorizes one `transfer(current contract, pool, amount)` per entry
+    /// inside the next call.
+    fn authorize_pulls(&self, pulls: &Vec<(HubAssetKey, i128)>) {
+        let mut transfers = Vec::new(&self.env);
+        for (market, amount) in pulls.iter() {
+            transfers.push_back((market.asset, amount));
+        }
+        authorize_transfers_as_current(
             &self.env,
-            &market.asset,
-            &this,
+            &self.env.current_contract_address(),
             &self.addresses.pool,
-            amount,
+            &transfers,
         );
-        self.controller().supply(
-            &this,
-            &account_id,
-            &spoke_id,
-            &vec![&self.env, (market.clone(), amount)],
-        )
+    }
+}
+
+/// `assets` with each market once and its amounts summed, in first-appearance
+/// order: the order and amounts the controller uses.
+fn merge(env: &Env, assets: &Vec<(HubAssetKey, i128)>) -> Vec<(HubAssetKey, i128)> {
+    let mut merged: Vec<(HubAssetKey, i128)> = Vec::new(env);
+    for (market, amount) in assets.iter() {
+        match (0..merged.len()).find(|&index| merged.get_unchecked(index).0 == market) {
+            Some(index) => {
+                let sum = merged
+                    .get_unchecked(index)
+                    .1
+                    .checked_add(amount)
+                    .unwrap_or_else(|| panic_with_error!(env, GenericError::MathOverflow));
+                merged.set(index, (market, sum));
+            }
+            None => merged.push_back((market, amount)),
+        }
+    }
+    merged
+}
+
+fn require_one_market_per_token(env: &Env, payments: &Vec<(HubAssetKey, i128)>) {
+    for i in 0..payments.len() {
+        for j in (i + 1)..payments.len() {
+            if payments.get_unchecked(i).0.asset == payments.get_unchecked(j).0.asset {
+                panic_with_error!(env, GenericError::InvalidPayments);
+            }
+        }
     }
 }
 

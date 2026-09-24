@@ -1,6 +1,6 @@
 [package]
 name = "xoxno-contract-sdk"
-version = "0.2.0"
+version = "0.2.1"
 description = "Clients, types, WASM and a test fixture for calling XOXNO Lending from Soroban contracts."
 readme = "README.md"
 documentation = "https://docs.rs/xoxno-contract-sdk"

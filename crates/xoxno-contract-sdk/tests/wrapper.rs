@@ -1,6 +1,7 @@
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{contract, contractimpl, vec, Address, Bytes, Env};
-use xoxno_contract_sdk::lending::constants::{RAY, WAD};
+use xoxno_contract_sdk::lending::constants::{NEW_ACCOUNT, RAY, WAD, WITHDRAW_ALL};
+use xoxno_contract_sdk::lending::controller::HubAssetKey;
 use xoxno_contract_sdk::lending::helpers::approve_flash_repayment;
 use xoxno_contract_sdk::lending::FlashLoanReceiver;
 use xoxno_contract_sdk::networks;
@@ -305,5 +306,256 @@ fn liquidate_with_an_offer_above_the_whole_debt_pays_only_the_debt() {
         s.fixture.controller.get_borrow_amount(&victim, &s.xlm.key),
         0
     );
+    assert!(s.usdc.token.balance(&s.integrator) > 0);
+}
+
+fn eurc<'a>(s: &Setup<'a>) -> Market<'a> {
+    s.fixture.create_market(&MarketConfig {
+        symbol: "EURC",
+        ..MarketConfig::usdc()
+    })
+}
+
+#[test]
+fn deposit_and_supply_batches_sum_repeated_markets() {
+    let s = setup();
+    s.xlm
+        .sac
+        .mock_all_auths()
+        .mint(&s.integrator, &(8_000 * UNIT));
+
+    let account = as_integrator(&s, |l| {
+        let account = l.deposit_batch(
+            NEW_ACCOUNT,
+            s.fixture.spoke_id,
+            &vec![
+                &s.env,
+                (s.usdc.key.clone(), 600 * UNIT),
+                (s.xlm.key.clone(), 5_000 * UNIT),
+                (s.usdc.key.clone(), 400 * UNIT),
+            ],
+        );
+        l.supply_batch(
+            account,
+            &vec![
+                &s.env,
+                (s.xlm.key.clone(), 3_000 * UNIT),
+                (s.usdc.key.clone(), 1_000 * UNIT),
+            ],
+        );
+        account
+    });
+
+    as_integrator(&s, |l| {
+        assert_eq!(l.collateral(account, &s.usdc.key), 2_000 * UNIT);
+        assert_eq!(l.collateral(account, &s.xlm.key), 8_000 * UNIT);
+    });
+    assert_eq!(s.usdc.token.balance(&s.integrator), 8_000 * UNIT);
+    assert_eq!(s.xlm.token.balance(&s.integrator), 0);
+}
+
+#[test]
+fn borrow_and_repay_batches_across_markets_return_each_refund() {
+    let s = setup();
+    let eurc = eurc(&s);
+    let account = as_integrator(&s, |l| {
+        l.open_account(s.fixture.spoke_id, &s.usdc.key, 10_000 * UNIT)
+    });
+    eurc.sac.mock_all_auths().mint(&s.integrator, &(500 * UNIT));
+
+    let repaid = as_integrator(&s, |l| {
+        l.borrow_batch(
+            account,
+            &vec![
+                &s.env,
+                (s.xlm.key.clone(), 10_000 * UNIT),
+                (eurc.key.clone(), 1_000 * UNIT),
+                (s.xlm.key.clone(), 5_000 * UNIT),
+            ],
+        );
+        assert_eq!(l.debt(account, &s.xlm.key), 15_000 * UNIT);
+        assert_eq!(l.debt(account, &eurc.key), 1_000 * UNIT);
+        l.repay_batch(
+            account,
+            &vec![
+                &s.env,
+                (s.xlm.key.clone(), 15_000 * UNIT),
+                (eurc.key.clone(), 1_500 * UNIT),
+            ],
+        )
+    });
+
+    assert_eq!(
+        repaid,
+        vec![
+            &s.env,
+            (s.xlm.key.clone(), 15_000 * UNIT),
+            (eurc.key.clone(), 1_000 * UNIT),
+        ]
+    );
+    as_integrator(&s, |l| assert!(l.position(account).debt.is_empty()));
+    assert_eq!(s.xlm.token.balance(&s.integrator), 0);
+    assert_eq!(eurc.token.balance(&s.integrator), 500 * UNIT);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #16)")]
+fn repay_batch_rejects_one_token_in_two_markets() {
+    let s = setup();
+    let other_hub = HubAssetKey {
+        asset: s.usdc.asset.clone(),
+        hub_id: s.fixture.hub_id + 1,
+    };
+    as_integrator(&s, |l| {
+        l.repay_batch(
+            1,
+            &vec![&s.env, (s.usdc.key.clone(), UNIT), (other_hub, UNIT)],
+        )
+    });
+}
+
+#[test]
+fn withdraw_batch_reports_each_amount_and_the_closure() {
+    let s = setup();
+    s.xlm
+        .sac
+        .mock_all_auths()
+        .mint(&s.integrator, &(5_000 * UNIT));
+    let account = as_integrator(&s, |l| {
+        l.deposit_batch(
+            NEW_ACCOUNT,
+            s.fixture.spoke_id,
+            &vec![
+                &s.env,
+                (s.usdc.key.clone(), 1_000 * UNIT),
+                (s.xlm.key.clone(), 5_000 * UNIT),
+            ],
+        )
+    });
+
+    let partial = as_integrator(&s, |l| {
+        l.withdraw_batch(
+            account,
+            &vec![
+                &s.env,
+                (s.usdc.key.clone(), 400 * UNIT),
+                (s.xlm.key.clone(), WITHDRAW_ALL),
+            ],
+        )
+    });
+    let last = as_integrator(&s, |l| {
+        l.withdraw_batch(account, &vec![&s.env, (s.usdc.key.clone(), WITHDRAW_ALL)])
+    });
+
+    assert!(!partial.account_closed);
+    assert_eq!(partial.amounts.len(), 2);
+    assert_eq!(
+        partial.amounts.get(0),
+        Some((s.usdc.key.clone(), 400 * UNIT))
+    );
+    let (xlm_key, xlm_amount) = partial.amounts.get(1).unwrap();
+    assert_eq!(xlm_key, s.xlm.key);
+    assert!(5_000 * UNIT - xlm_amount <= 1);
+    assert!(last.account_closed);
+    assert!(600 * UNIT - last.amounts.get(0).unwrap().1 <= 1);
+    assert!(!s.fixture.controller.account_exists(&account));
+}
+
+fn two_debt_victim<'a>(s: &Setup<'a>, eurc: &Market<'a>) -> u64 {
+    let borrower = Address::generate(&s.env);
+    s.usdc
+        .sac
+        .mock_all_auths()
+        .mint(&borrower, &(10_000 * UNIT));
+    let victim = s.fixture.controller.mock_all_auths().supply(
+        &borrower,
+        &0,
+        &s.fixture.spoke_id,
+        &vec![&s.env, (s.usdc.key.clone(), 10_000 * UNIT)],
+    );
+    s.fixture.controller.mock_all_auths().borrow(
+        &borrower,
+        &victim,
+        &vec![
+            &s.env,
+            (s.xlm.key.clone(), 35_000 * UNIT),
+            (eurc.key.clone(), 3_500 * UNIT),
+        ],
+        &None,
+    );
+    s.fixture.set_price(&s.xlm, WAD * 14 / 100);
+    victim
+}
+
+#[test]
+fn liquidate_batch_with_offers_above_both_debts_pays_the_plan_in_each_market() {
+    let s = setup();
+    let eurc = eurc(&s);
+    let victim = two_debt_victim(&s, &eurc);
+    s.xlm
+        .sac
+        .mock_all_auths()
+        .mint(&s.integrator, &(100_000 * UNIT));
+    eurc.sac
+        .mock_all_auths()
+        .mint(&s.integrator, &(10_000 * UNIT));
+
+    let paid = as_integrator(&s, |l| {
+        l.liquidate_batch(
+            victim,
+            &vec![
+                &s.env,
+                (s.xlm.key.clone(), 50_000 * UNIT),
+                (eurc.key.clone(), 10_000 * UNIT),
+                (s.xlm.key.clone(), 50_000 * UNIT),
+            ],
+        )
+    });
+
+    assert!(!paid.is_empty());
+    for (market, amount) in paid.iter() {
+        assert!(amount > 0);
+        if market == s.xlm.key {
+            assert_eq!(s.xlm.token.balance(&s.integrator), 100_000 * UNIT - amount);
+        } else {
+            assert_eq!(market, eurc.key);
+            assert_eq!(eurc.token.balance(&s.integrator), 10_000 * UNIT - amount);
+        }
+    }
+    assert!(s.usdc.token.balance(&s.integrator) > 0);
+}
+
+#[test]
+fn liquidate_batch_with_small_offers_pays_each_offer() {
+    let s = setup();
+    let eurc = eurc(&s);
+    let victim = two_debt_victim(&s, &eurc);
+    s.xlm
+        .sac
+        .mock_all_auths()
+        .mint(&s.integrator, &(1_000 * UNIT));
+    eurc.sac.mock_all_auths().mint(&s.integrator, &(100 * UNIT));
+
+    let paid = as_integrator(&s, |l| {
+        l.liquidate_batch(
+            victim,
+            &vec![
+                &s.env,
+                (s.xlm.key.clone(), 1_000 * UNIT),
+                (eurc.key.clone(), 100 * UNIT),
+            ],
+        )
+    });
+
+    assert_eq!(
+        paid,
+        vec![
+            &s.env,
+            (s.xlm.key.clone(), 1_000 * UNIT),
+            (eurc.key.clone(), 100 * UNIT),
+        ]
+    );
+    assert_eq!(s.xlm.token.balance(&s.integrator), 0);
+    assert_eq!(eurc.token.balance(&s.integrator), 0);
     assert!(s.usdc.token.balance(&s.integrator) > 0);
 }
