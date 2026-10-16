@@ -1,25 +1,26 @@
 {
   "source": {
     "repository": "XOXNO/rs-lending-xlm",
-    "tag": "v1.1.0",
-    "commit": "dc57a856293b5ca70a40f128de2d6fd243b45177",
-    "method": "release"
+    "tag": "v1.0.1",
+    "commit": "65761475c96ea2da4955b34d5cb3057f21e6a929",
+    "method": "release",
+    "config_commit": "dc57a856293b5ca70a40f128de2d6fd243b45177"
   },
   "contracts": {
     "controller": {
       "file": "controller.wasm",
-      "sha256": "98d94a1f2e5f7135ad5fa0d5022c4263464ab9bf605ec6ce10fc64d813d4b276",
-      "code_sha256": "7ef91b0a6150c8f613c4e1083dab16bf3ad0bad0658591461b2f5513a190b97e",
+      "sha256": "0461caaa9609cd990d5803667908cd1c5026498089607778f1f76c27c788809f",
+      "code_sha256": "44424a36aab807f1629df2ef57a600ccde59155abbe9db81eb56a39419bebe71",
       "deploy_file": "deploy/controller.wasm",
-      "deploy_sha256": "2dd536b06aab811801b5f3f2ad44629910b825c1535f85b420d16bbc4e6ce8b2",
+      "deploy_sha256": "52ed959d53933c4616b927cea04acb2dddc9a7b159c394e926978655ff17fd9b",
       "mainnet_contract": "CAUCMIN5KSXEVZ7NMXR3LZATGD5EFIEUI5XWTFLYRO2R5OTXI22WE5JX"
     },
     "pool": {
       "file": "pool.wasm",
-      "sha256": "24ba45f4e37719b327db66057608bfe11149284f346a6fdffb66650475276c96",
-      "code_sha256": "9743ea0483762c6903982c40e2c28e656c1b07a17e9349b184cbfd5970471478",
+      "sha256": "9858d6ee97fee3908f2c6039432aae0280469631544cac4221be1bb80e0b2ffa",
+      "code_sha256": "33fbd71b45f8ac346b6d2d1b9410eeb540a0e77eb59e5315e4334fe47533df23",
       "deploy_file": "deploy/pool.wasm",
-      "deploy_sha256": "510246738d4533c4f30cb509a0497c1940856c1093d34a963e7ba7a47ff3c3bc",
+      "deploy_sha256": "0be54b45afe46f40b82e66d8569074f421e872d0304c7c540db8dd14df528965",
       "mainnet_contract": "CBXRNDQMAJFG4VUKMKFEMFS75UUXE2SPSNV4LEEFCSNBCN66PYRWBKXO"
     },
     "position_nft": {
@@ -32,29 +33,29 @@
     },
     "price_aggregator": {
       "file": "price_aggregator.wasm",
-      "sha256": "f195bf3af072b2ef17833e439b88122d49666790f54a3b59932756f6053ba34e",
-      "code_sha256": "5aa090f12804c1af9a6942cb46805c5e929027c44fb236ecf9b3352920910970",
+      "sha256": "db76c0cbeb9adb7e88496cf2926a7f5319119d8d6537cf469d5e410d0d5d6d78",
+      "code_sha256": "39e52d6901df6932673b29fe4d20fba50ba879de8ae7bc0c2dccd94639a1361d",
       "deploy_file": "deploy/price_aggregator.wasm",
-      "deploy_sha256": "3f510c4f611f38736675002ce645821c690735ce0b12695c2ce3cbe44c862b9b",
+      "deploy_sha256": "7c38fc75e1774fbbdd459ccbfdfe2f224817db8707da6bafcf06561ecb5fee9b",
       "mainnet_contract": "CBGUF2G2Q7HCVCWYISDXBHPVBGMYNXA7PG2VET66YBZX6IKOOV27NSMV"
     },
     "governance": {
       "file": "governance.wasm",
-      "sha256": "56a700291140d666278aa4abd0d6401c4a07bf16f02c85dfae39e6aa60c0e555",
-      "code_sha256": "d3179cefb85079f8555d9eaa92776cb165ca4897b12fed9ca5ba573246fc966e",
+      "sha256": "fff2c7dfa31a84ebd5c64ea14466cc76d347b8390385189928d3606b7693dfe6",
+      "code_sha256": "f144c96492cea0c247f890871a3bc9b2139b920f6d0df765de50bd9823cacb33",
       "deploy_file": "deploy/governance.wasm",
-      "deploy_sha256": "4d54083ee062d6eafcf9f1dad8a3a79c6d1b5b8cfe34f6e3e18b9007bb0bdf8f",
+      "deploy_sha256": "9a15c97e17f0421fa84fa457dfd231909a37bebebe6e1a6b65bf0ecf0104c230",
       "mainnet_contract": "CC44PEQW7HSEPKAZ5ZRPH2JS5M5KVJXCUBLJ2ZX4E3WCDKMNFILHC2AD"
     }
   },
   "mocks": {
     "mock_reflector": {
       "file": "mock_reflector.wasm",
-      "sha256": "e81c8ad24b3a93a8d5cdc802508f8bce1946a763ae6f14ea2b0f17bb6177dd38"
+      "sha256": "164d396456293e1f2212e125054c1e71d4d40de8fa7a6700985115ffb13cdcc2"
     },
     "mock_redstone": {
       "file": "mock_redstone.wasm",
-      "sha256": "393e2a3942f93bf0d8c59ba79335d19fbe5b4de59ff9e72e4fcc42370d7bb8a1"
+      "sha256": "42f928bea95cdd5ee8b9cf1f610552cbe13cdf9d619827ae9e6ed1b926e2c383"
     }
   }
 }

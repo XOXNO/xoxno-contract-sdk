@@ -42,7 +42,7 @@ python3 scripts/sync_wasm.py --release <rs-lending-xlm tag>
 The script:
 
 - verifies each file's build attestation, signed by the rs-lending-xlm
-  `release.yml` workflow;
+  `release.yml` workflow, bound to one immutable source commit;
 - checks that its code equals the release's deploy artifact, and that the
   artifact hash equals the live mainnet contract hash;
 - writes the files with docs to `wasm/`, the deploy artifacts to
@@ -54,7 +54,8 @@ release hashes, so use it only for tests. `--allow-undeployed` accepts code
 that is not on mainnet yet, and is for pre-releases only.
 
 The `Mainnet drift` workflow runs `scripts/check_mainnet.py` every day. It
-fails when mainnet runs code that the SDK does not embed.
+fails when mainnet runs code that the SDK does not embed. A hash difference
+does not establish which snapshot is newer.
 
 ## Release
 

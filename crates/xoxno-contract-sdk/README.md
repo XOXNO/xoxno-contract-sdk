@@ -15,11 +15,11 @@ overflow-checks = true
 
 [dependencies]
 soroban-sdk = "28"
-xoxno-contract-sdk = "0.2"
+xoxno-contract-sdk = "0.3"
 
 [dev-dependencies]
 soroban-sdk = { version = "28", features = ["testutils"] }
-xoxno-contract-sdk = { version = "0.2", features = ["testutils"] }
+xoxno-contract-sdk = { version = "0.3", features = ["testutils"] }
 ```
 
 Requires Rust 1.91 or later. Build contracts with `stellar contract build`
@@ -285,8 +285,8 @@ The embedded fixture and generated specs are a protocol snapshot, recorded in
 [wasm/MANIFEST.json][manifest] with an immutable source commit and artifact
 hashes. Generated types come from documentation artifacts; each module's
 `WASM` constant is the corresponding deploy artifact. This crate uses
-`soroban-sdk` 28; its manifest records protocol source commit `dc57a8562`,
-labeled `v1.1.0`. A release name alone does not establish current deployed
+`soroban-sdk` 28; its manifest records protocol source commit `65761475c`,
+labeled `v1.0.1`. A release name alone does not establish current deployed
 behavior.
 
 `scripts/verify_wasm.py` checks embedded integrity; `scripts/gen_clients.py

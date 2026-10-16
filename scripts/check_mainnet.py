@@ -2,8 +2,8 @@
 """Check that every embedded contract is still the code deployed on mainnet.
 
 Reads each contract instance's WASM hash from the mainnet RPC and compares it
-with `deploy_sha256` in wasm/MANIFEST.json. A difference means mainnet was
-upgraded and a new SDK release is due. The price aggregator address is resolved
+with `deploy_sha256` in wasm/MANIFEST.json. A difference means the SDK snapshot differs
+from mainnet and needs review before release. The price aggregator address is resolved
 from the controller with a read-only simulation, so replacements are checked too.
 
 Usage: check_mainnet.py [--rpc-url URL]
@@ -31,14 +31,14 @@ def main() -> int:
     for name, entry in manifest["contracts"].items():
         address = aggregator if name == "price_aggregator" else entry["mainnet_contract"]
         live = live_wasm_hash(address, cfg)
-        status = "ok" if live == entry["deploy_sha256"] else "UPGRADED"
+        status = "ok" if live == entry["deploy_sha256"] else "DIFFERS"
         print(f"{name:17} {status:8} sdk {entry['deploy_sha256'][:12]} mainnet {live[:12]}")
         if address != entry["mainnet_contract"]:
             print(f"{'':17} active address {address} (replaced {entry['mainnet_contract']})")
         if live != entry["deploy_sha256"]:
             stale.append(name)
     if stale:
-        print(f"check_mainnet: mainnet runs new code for {', '.join(stale)}; sync and release the SDK",
+        print(f"check_mainnet: mainnet runs different code for {', '.join(stale)}; sync and release the SDK",
               file=sys.stderr)
     return 1 if stale and not args.allow_undeployed else 0
 

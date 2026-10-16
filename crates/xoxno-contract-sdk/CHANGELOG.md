@@ -6,10 +6,16 @@ All notable changes to this crate are recorded here. The format follows
 means the embedded WASM, the ABI, the `soroban-sdk` major version or the
 fixture API changed.
 
-## [0.2.3] - 2026-10-16
+## [0.3.0] - 2026-10-16
 
 ### Changed
 
+- Refreshed the embedded protocol, documentation specs and mocks from attested
+  `v1.0.1`, commit `65761475c96ea2da4955b34d5cb3057f21e6a929`. Its five deploy
+  artifacts match mainnet. The previous SDK fixture came from `v1.1.0`,
+  commit `dc57a8562`, rather than the code mainnet runs. Public generated
+  method signatures are unchanged; the fixture refresh requires this minor
+  SDK version bump.
 - The main guide starts with ownership, authorization and units, then shows a
   complete owner-controlled deposit, withdrawal, closure and reopening flow
   with constructor-injected deployment addresses. Advanced recipes link to
