@@ -53,6 +53,13 @@ def fail(message: str) -> None:
     sys.exit(f"sync_wasm: {message}")
 
 
+def resolve_commit(ref: str) -> str:
+    commit = run("gh", "api", f"repos/{REPO}/commits/{ref}", "--jq", ".sha").strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        fail(f"{ref}: cannot resolve an immutable source commit")
+    return commit
+
+
 def from_build_dir(build: pathlib.Path) -> tuple[dict, dict, dict]:
     """Returns (files, deploy_files, source) from a local checkout."""
     if run("git", "-C", str(build), "status", "--porcelain", "--untracked-files=no").strip():
@@ -73,16 +80,17 @@ def from_build_dir(build: pathlib.Path) -> tuple[dict, dict, dict]:
 
 def from_release(tag: str) -> tuple[dict, dict, dict]:
     """Returns (files, deploy_files, source) from an attested release."""
+    commit = resolve_commit(tag)
     with tempfile.TemporaryDirectory() as tmp:
         patterns = [arg for name in CONTRACTS for arg in ("-p", f"{name}.wasm")]
         run("gh", "release", "download", tag, "-R", REPO, "-D", tmp, "-p", "sdk-*", *patterns)
         out = pathlib.Path(tmp)
-        verify_attestation(out / "sdk-manifest.json")
+        verify_attestation(out / "sdk-manifest.json", commit)
         manifest = json.loads((out / "sdk-manifest.json").read_text())
         files, deploy = {}, {}
         for name in CONTRACTS + list(MOCKS):
             path = out / f"sdk-{name}.wasm"
-            verify_attestation(path)
+            verify_attestation(path, commit)
             files[name] = path.read_bytes()
             entry = manifest[name]
             if sha256(files[name]) != entry["sha256"]:
@@ -91,19 +99,18 @@ def from_release(tag: str) -> tuple[dict, dict, dict]:
                 if code_hash(files[name]) != entry["code_sha256"]:
                     fail(f"{name}: code hash differs from sdk-manifest.json")
                 deploy_path = out / f"{name}.wasm"
-                verify_attestation(deploy_path)
+                verify_attestation(deploy_path, commit)
                 deploy[name] = deploy_path.read_bytes()
                 if sha256(deploy[name]) != entry["deploy_sha256"]:
                     fail(f"{name}: deploy artifact hash differs from sdk-manifest.json")
                 if code_hash(deploy[name]) != entry["code_sha256"]:
                     fail(f"{name}: deploy artifact code differs from the SDK file")
-    commit = run("gh", "api", f"repos/{REPO}/commits/{tag}", "--jq", ".sha").strip()
     return files, deploy, {"tag": tag, "commit": commit, "method": "release"}
 
 
-def verify_attestation(path: pathlib.Path) -> None:
+def verify_attestation(path: pathlib.Path, commit: str) -> None:
     run("gh", "attestation", "verify", str(path), "--repo", REPO, "--signer-workflow", SIGNER_WORKFLOW,
-        "--deny-self-hosted-runners")
+        "--deny-self-hosted-runners", "--source-digest", commit)
 
 
 def load_config(config_dir: "pathlib.Path | None", ref: str) -> dict:
@@ -131,6 +138,17 @@ def live_wasm_hash(contract: str, cfg: dict) -> str:
     return found[0]
 
 
+def live_price_aggregator(controller: str, cfg: dict) -> str:
+    out = run("stellar", "contract", "invoke", "--id", controller,
+              "--source-account", "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+              "--rpc-url", cfg["rpc_url"], "--network-passphrase", cfg["network_passphrase"],
+              "--send=no", "--no-cache", "--", "price_aggregator")
+    address = json.loads(out)
+    if not isinstance(address, str) or not re.fullmatch(r"C[A-Z2-7]{55}", address):
+        fail(f"{controller}: cannot read the active price aggregator from RPC")
+    return address
+
+
 def check_deployed(deploy: dict, networks: dict, allow_undeployed: bool) -> None:
     mainnet = networks["mainnet"]
     for name, data in deploy.items():
@@ -151,6 +169,7 @@ def write_manifest(files: dict, deploy: dict, source: dict) -> None:
             "tag": source["tag"],
             "commit": source["commit"],
             "method": source["method"],
+            "config_commit": source["config_ref"],
         },
         "contracts": {},
         "mocks": {},
@@ -213,9 +232,13 @@ def main() -> None:
     args = parser.parse_args()
 
     files, deploy, source = from_release(args.release) if args.release else from_build_dir(args.build_dir)
-    source.update(load_config(args.config_dir, "main"))
-    source["config_ref"] = (run("git", "-C", str(args.config_dir), "rev-parse", "--short", "HEAD").strip()
-                            if args.config_dir else "main")
+    if args.config_dir and run("git", "-C", str(args.config_dir), "status", "--porcelain", "--", "configs").strip():
+        fail(f"{args.config_dir}: deployment configs have uncommitted changes")
+    source["config_ref"] = (run("git", "-C", str(args.config_dir), "rev-parse", "HEAD").strip()
+                            if args.config_dir else resolve_commit("main"))
+    source.update(load_config(args.config_dir, source["config_ref"]))
+    mainnet = source["networks"]["mainnet"]
+    mainnet["price_aggregator"] = live_price_aggregator(mainnet["controller"], mainnet)
     check_deployed(deploy, source["networks"], args.allow_undeployed)
     if WASM_DIR.exists():
         shutil.rmtree(WASM_DIR)
