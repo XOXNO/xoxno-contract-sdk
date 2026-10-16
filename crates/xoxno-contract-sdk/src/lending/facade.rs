@@ -55,7 +55,8 @@ pub struct Position {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Withdrawal {
-    /// Token base units the current contract received.
+    /// Token base units released by the pool. Receipt-tax tokens can deliver
+    /// less; measure the current contract's balance change before forwarding.
     pub amount: i128,
     /// The withdrawal left the account with no supply and no debt: the
     /// protocol deleted the account and burned its position NFT. The id is
@@ -67,7 +68,7 @@ pub struct Withdrawal {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Withdrawals {
-    /// Token base units the current contract received per market, one entry
+    /// Token base units released by the pool per market, one entry
     /// per market in request order.
     pub amounts: Vec<(HubAssetKey, i128)>,
     /// As [`Withdrawal::account_closed`].
@@ -223,9 +224,9 @@ impl XoxnoLending {
     }
 
     /// Repays up to `amount` of the account's debt in `market` from the
-    /// current contract, and returns the amount repaid. The pool refunds any
-    /// amount above the debt to the current contract; the return value
-    /// excludes that refund.
+    /// current contract, and returns its net token spend after refunds.
+    /// Receipt-tax tokens can reduce debt by less than this spend. Read
+    /// [`debt`](Self::debt) before and after to measure debt retired.
     pub fn repay(&self, account_id: u64, market: &HubAssetKey, amount: i128) -> i128 {
         self.repay_batch(account_id, &vec![&self.env, (market.clone(), amount)])
             .get(0)
@@ -233,7 +234,7 @@ impl XoxnoLending {
     }
 
     /// [`repay`](Self::repay) for several markets in one call. Returns the
-    /// amount repaid per market, in request order. A market listed twice is
+    /// net token spend per market, in request order. A market listed twice is
     /// repaid once with the sum. Each token can appear in only one market,
     /// because the refund is measured per token; otherwise it panics with
     /// `InvalidPayments`.
@@ -260,7 +261,7 @@ impl XoxnoLending {
     }
 
     /// Withdraws `amount` of `market` to the current contract. The result has
-    /// the amount received and whether the withdrawal closed the account.
+    /// the pool's output before receipt tax and whether the account closed.
     pub fn withdraw(&self, account_id: u64, market: &HubAssetKey, amount: i128) -> Withdrawal {
         let withdrawals =
             self.withdraw_batch(account_id, &vec![&self.env, (market.clone(), amount)]);
@@ -316,12 +317,13 @@ impl XoxnoLending {
     }
 
     /// Liquidates `account_id` by repaying up to `amount` of its debt in
-    /// `market` from the current contract, and returns the amount paid. The
-    /// seized collateral goes to the current contract.
+    /// `market` from the current contract, and returns its net token spend.
+    /// The seized collateral goes to the current contract. If it includes the
+    /// payment token, that receipt reduces the spend, which can be negative.
     ///
-    /// The controller can use less than `amount`. This reads the plan with
-    /// `get_liquidation_estimate` first, then offers and authorizes only the
-    /// planned amount.
+    /// The controller can pull the entire offer before refunding excess, so
+    /// the current contract must hold `amount`. Keeping the offer intact lets
+    /// an overoffer cover receipt tax when the protocol closes the debt.
     pub fn liquidate(&self, account_id: u64, market: &HubAssetKey, amount: i128) -> i128 {
         self.liquidate_batch(account_id, &vec![&self.env, (market.clone(), amount)])
             .get(0)
@@ -329,7 +331,7 @@ impl XoxnoLending {
     }
 
     /// [`liquidate`](Self::liquidate) with offers in several debt markets in
-    /// one call. Returns the amount paid per market, for the markets the plan
+    /// one call. Returns net token spend per market, for the markets the plan
     /// uses, in request order. A market listed twice is offered once with the
     /// sum. Each token can appear in only one market, because the plan reports
     /// refunds per token; otherwise it panics with `InvalidPayments`.
@@ -344,6 +346,9 @@ impl XoxnoLending {
             self.controller()
                 .get_liquidation_estimate(&account_id, &offers, &SeizeMode::Transfer);
         let mut planned = Vec::new(&self.env);
+        let mut pulls = Vec::new(&self.env);
+        let mut before = Vec::new(&self.env);
+        let this = self.env.current_contract_address();
         for (market, offer) in offers.iter() {
             let refund: i128 = estimate
                 .refunds
@@ -353,17 +358,24 @@ impl XoxnoLending {
                 .sum();
             let paid = offer - refund;
             if paid > 0 {
+                before.push_back(token::TokenClient::new(&self.env, &market.asset).balance(&this));
+                pulls.push_back((market.clone(), offer));
+                // Full-close pulls the offer; other plans pull the planned amount.
+                if paid != offer {
+                    pulls.push_back((market.clone(), paid));
+                }
                 planned.push_back((market, paid));
             }
         }
-        self.authorize_pulls(&planned);
-        self.controller().liquidate(
-            &self.env.current_contract_address(),
-            &account_id,
-            &planned,
-            &SeizeMode::Transfer,
-        );
-        planned
+        self.authorize_pulls(&pulls);
+        self.controller()
+            .liquidate(&this, &account_id, &offers, &SeizeMode::Transfer);
+        let mut spent = Vec::new(&self.env);
+        for (index, (market, _)) in planned.iter().enumerate() {
+            let after = token::TokenClient::new(&self.env, &market.asset).balance(&this);
+            spent.push_back((market, before.get_unchecked(index as u32) - after));
+        }
+        spent
     }
 
     // ----- Account views ------------------------------------------------------
@@ -640,6 +652,9 @@ impl XoxnoLending {
 fn merge(env: &Env, assets: &Vec<(HubAssetKey, i128)>) -> Vec<(HubAssetKey, i128)> {
     let mut merged: Vec<(HubAssetKey, i128)> = Vec::new(env);
     for (market, amount) in assets.iter() {
+        if amount <= 0 {
+            panic_with_error!(env, GenericError::AmountMustBePositive);
+        }
         match (0..merged.len()).find(|&index| merged.get_unchecked(index).0 == market) {
             Some(index) => {
                 let sum = merged

@@ -1,4 +1,4 @@
-//! Clients, types and WASM for the deployed XOXNO Lending contracts.
+//! Clients, types and WASM for the pinned XOXNO Lending protocol snapshot.
 //!
 //! Each contract module is generated with `contractimport!` from the WASM in
 //! `wasm/`, which keeps the contract spec docs and has the same code as the
@@ -35,7 +35,7 @@ pub mod controller {
     }
     pub use spec::*;
 
-    /// The deployed contract code.
+    /// The pinned deploy artifact; see `wasm/MANIFEST.json`.
     pub const WASM: &[u8] = include_bytes!("../../wasm/deploy/controller.wasm");
 
     include!("clients/controller.rs");
@@ -50,7 +50,7 @@ pub mod pool {
     }
     pub use spec::*;
 
-    /// The deployed contract code.
+    /// The pinned deploy artifact; see `wasm/MANIFEST.json`.
     pub const WASM: &[u8] = include_bytes!("../../wasm/deploy/pool.wasm");
 
     include!("clients/pool.rs");
@@ -65,7 +65,7 @@ pub mod position_nft {
     }
     pub use spec::*;
 
-    /// The deployed contract code.
+    /// The pinned deploy artifact; see `wasm/MANIFEST.json`.
     pub const WASM: &[u8] = include_bytes!("../../wasm/deploy/position_nft.wasm");
 
     include!("clients/position_nft.rs");
@@ -80,7 +80,7 @@ pub mod price_aggregator {
     }
     pub use spec::*;
 
-    /// The deployed contract code.
+    /// The pinned deploy artifact; see `wasm/MANIFEST.json`.
     pub const WASM: &[u8] = include_bytes!("../../wasm/deploy/price_aggregator.wasm");
 
     include!("clients/price_aggregator.rs");
