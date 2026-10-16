@@ -7,6 +7,10 @@ use xoxno_contract_sdk::testutils::{LendingFixture, Market, MarketConfig};
 const UNIT: i128 = 10_000_000;
 const DAY: u64 = 86_400;
 
+#[path = "../../account-basics/tests/support/receipt_tax.rs"]
+mod receipt_tax;
+use receipt_tax::{ReceiptTaxToken, ReceiptTaxTokenClient};
+
 struct Setup<'a> {
     env: Env,
     fixture: LendingFixture<'a>,
@@ -138,4 +142,22 @@ fn a_direct_call_to_the_callback_is_rejected() {
             .allowance(&s.vault.address, &s.fixture.pool.address),
         0
     );
+}
+
+#[test]
+fn taxed_contributions_revert_without_spending_prefunded_tokens() {
+    let s = setup();
+    let from = Address::generate(&s.env);
+    s.env
+        .register_at(&s.usdc.asset, ReceiptTaxToken, (s.vault.address.clone(),));
+    let token = ReceiptTaxTokenClient::new(&s.env, &s.usdc.asset);
+    token.mint(&from, &(100 * UNIT));
+    token.mint(&s.vault.address, &(10 * UNIT));
+
+    assert!(s.vault.try_deposit(&from, &(100 * UNIT)).is_err());
+
+    assert_eq!(token.balance(&from), 100 * UNIT);
+    assert_eq!(token.balance(&s.vault.address), 10 * UNIT);
+    assert_eq!(s.fixture.position_nft.balance(&s.vault.address), 0);
+    assert_eq!(s.vault.balance(), 0);
 }

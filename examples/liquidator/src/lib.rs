@@ -1,9 +1,9 @@
 //! Example: a contract that liquidates XOXNO Lending accounts.
 //!
 //! The contract holds the debt tokens it repays with and receives the seized
-//! collateral. `XoxnoLending::liquidate` reads the liquidation plan first, so
-//! it authorizes exactly the amount the controller pulls, which can be less
-//! than the amount offered.
+//! collateral. It must hold the full offered amount, including any overoffer
+//! needed to cover a receipt tax. The SDK authorizes the possible exact pulls
+//! and measures the resulting net token spend.
 
 #![no_std]
 
@@ -46,8 +46,8 @@ impl Liquidator {
     }
 
     /// Liquidates the account if it is liquidatable, repaying up to `amount`
-    /// of its debt in `market`. Returns the amount paid; 0 if the account is
-    /// healthy.
+    /// of its debt in `market`. Returns net token spend; it can be negative
+    /// when seized collateral is the payment token. Returns 0 for a healthy account.
     pub fn liquidate(env: Env, account_id: u64, market: HubAssetKey, amount: i128) -> i128 {
         config(&env).owner.require_auth();
         let lending = lending(&env);

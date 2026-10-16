@@ -1,7 +1,7 @@
 [package]
 name = "simple-deposit"
 version = "0.0.0"
-description = "Example: the smallest contract function that deposits into XOXNO Lending, with hub, spoke and token as parameters."
+description = "Example: owner-controlled XOXNO Lending deposits and withdrawals with caller-chosen markets."
 publish = false
 edition.workspace = true
 rust-version.workspace = true

@@ -4,6 +4,10 @@ use soroban_sdk::{Address, Env};
 use xoxno_contract_sdk::lending::constants::WAD;
 use xoxno_contract_sdk::testutils::{LendingFixture, Market, MarketConfig};
 
+#[path = "support/receipt_tax.rs"]
+mod receipt_tax;
+use receipt_tax::{ReceiptTaxToken, ReceiptTaxTokenClient};
+
 const UNIT: i128 = 10_000_000;
 
 struct Setup<'a> {
@@ -134,4 +138,130 @@ fn a_closed_account_is_replaced_by_a_new_one() {
     let second = deposit(&s, 100 * UNIT);
     assert_ne!(second, first);
     assert_eq!(s.contract.account_id(), Some(second));
+}
+
+#[test]
+fn exact_receipts_preserve_prefunding_through_the_full_roundtrip() {
+    let s = setup();
+    let untaxed = Address::generate(&s.env);
+    for (market, reserve) in [(&s.usdc, 100 * UNIT), (&s.xlm, 200 * UNIT)] {
+        let pool_balance = market.token.balance(&s.fixture.pool.address);
+        s.env
+            .register_at(&market.asset, ReceiptTaxToken, (untaxed.clone(),));
+        let token = ReceiptTaxTokenClient::new(&s.env, &market.asset);
+        token.mint(&s.fixture.pool.address, &pool_balance);
+        token.mint(&s.contract.address, &reserve);
+    }
+    let from = Address::generate(&s.env);
+    let collateral = ReceiptTaxTokenClient::new(&s.env, &s.usdc.asset);
+    let debt = ReceiptTaxTokenClient::new(&s.env, &s.xlm.asset);
+    collateral.mint(&from, &(1_000 * UNIT));
+
+    let account = s.contract.deposit(&from, &(1_000 * UNIT));
+    s.contract.borrow(&s.xlm.key, &(2_000 * UNIT));
+    assert_eq!(debt.balance(&s.owner), 2_000 * UNIT);
+    assert_eq!(s.contract.repay(&s.xlm.key, &(2_000 * UNIT)), 2_000 * UNIT);
+    let withdrawal = s.contract.withdraw_all();
+
+    assert!(withdrawal.account_closed);
+    assert!(!s.fixture.controller.account_exists(&account));
+    assert_eq!(collateral.balance(&s.contract.address), 100 * UNIT);
+    assert_eq!(debt.balance(&s.contract.address), 200 * UNIT);
+    assert_eq!(collateral.balance(&s.owner), withdrawal.amount);
+}
+
+#[test]
+fn taxed_contributions_revert_without_spending_prefunded_tokens() {
+    for reserve in [0, 10 * UNIT] {
+        let s = setup();
+        let from = Address::generate(&s.env);
+        s.env.register_at(
+            &s.usdc.asset,
+            ReceiptTaxToken,
+            (s.contract.address.clone(),),
+        );
+        let token = ReceiptTaxTokenClient::new(&s.env, &s.usdc.asset);
+        token.mint(&from, &(100 * UNIT));
+        token.mint(&s.contract.address, &reserve);
+
+        assert!(s.contract.try_deposit(&from, &(100 * UNIT)).is_err());
+
+        assert_eq!(token.balance(&from), 100 * UNIT);
+        assert_eq!(token.balance(&s.contract.address), reserve);
+        assert_eq!(s.contract.account_id(), None);
+        assert_eq!(s.fixture.position_nft.balance(&s.contract.address), 0);
+    }
+}
+
+#[test]
+fn taxed_repayment_funding_reverts_without_spending_prefunded_tokens() {
+    let s = setup();
+    deposit(&s, 1_000 * UNIT);
+    s.contract.borrow(&s.xlm.key, &(2_000 * UNIT));
+    s.env
+        .register_at(&s.xlm.asset, ReceiptTaxToken, (s.contract.address.clone(),));
+    let token = ReceiptTaxTokenClient::new(&s.env, &s.xlm.asset);
+    token.mint(&s.owner, &(2_000 * UNIT));
+    token.mint(&s.contract.address, &(200 * UNIT));
+
+    assert!(s.contract.try_repay(&s.xlm.key, &(2_000 * UNIT)).is_err());
+
+    assert_eq!(token.balance(&s.owner), 2_000 * UNIT);
+    assert_eq!(token.balance(&s.contract.address), 200 * UNIT);
+    assert_eq!(s.contract.position().debt.get(0).unwrap().1, 2_000 * UNIT);
+}
+
+#[test]
+fn taxed_borrow_receipts_revert_without_spending_prefunded_tokens() {
+    let s = setup();
+    deposit(&s, 1_000 * UNIT);
+    let pool_balance = s.xlm.token.balance(&s.fixture.pool.address);
+    s.env
+        .register_at(&s.xlm.asset, ReceiptTaxToken, (s.contract.address.clone(),));
+    let token = ReceiptTaxTokenClient::new(&s.env, &s.xlm.asset);
+    token.mint(&s.fixture.pool.address, &pool_balance);
+    token.mint(&s.contract.address, &(200 * UNIT));
+
+    assert!(s.contract.try_borrow(&s.xlm.key, &(2_000 * UNIT)).is_err());
+
+    assert_eq!(token.balance(&s.owner), 0);
+    assert_eq!(token.balance(&s.contract.address), 200 * UNIT);
+    assert_eq!(token.balance(&s.fixture.pool.address), pool_balance);
+    assert!(s.contract.position().debt.is_empty());
+}
+
+#[test]
+fn taxed_withdrawal_receipts_and_owner_delivery_revert_the_account_close() {
+    for tax_owner in [false, true] {
+        let s = setup();
+        let account = deposit(&s, 1_000 * UNIT);
+        let pool_balance = s.usdc.token.balance(&s.fixture.pool.address);
+        let recipient = if tax_owner {
+            s.owner.clone()
+        } else {
+            s.contract.address.clone()
+        };
+        s.env
+            .register_at(&s.usdc.asset, ReceiptTaxToken, (recipient,));
+        let token = ReceiptTaxTokenClient::new(&s.env, &s.usdc.asset);
+        token.mint(&s.fixture.pool.address, &pool_balance);
+        token.mint(&s.contract.address, &(100 * UNIT));
+
+        assert!(s.contract.try_withdraw_all().is_err());
+
+        assert_eq!(token.balance(&s.owner), 0);
+        assert_eq!(token.balance(&s.contract.address), 100 * UNIT);
+        assert_eq!(token.balance(&s.fixture.pool.address), pool_balance);
+        assert_eq!(s.contract.account_id(), Some(account));
+        assert_eq!(
+            s.fixture.position_nft.owner_of(&(account as u32)),
+            s.contract.address
+        );
+        assert_eq!(
+            s.fixture
+                .controller
+                .get_collateral_amount(&account, &s.usdc.key),
+            1_000 * UNIT
+        );
+    }
 }

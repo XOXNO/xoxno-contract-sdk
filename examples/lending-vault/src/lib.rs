@@ -1,5 +1,7 @@
 //! Example integration: a vault that keeps every deposit in one XOXNO Lending
 //! account and accepts flash loans that its owner starts.
+//! Contributions belong to the owner; this contract issues no depositor
+//! shares. Tokens must transfer exact amounts; receipt taxes are unsupported.
 
 #![no_std]
 
@@ -65,12 +67,13 @@ impl LendingVault {
     /// lending account and returns the account id.
     pub fn deposit(env: Env, from: Address, amount: i128) -> u64 {
         from.require_auth();
+        assert!(amount > 0, "amount must be positive");
         let cfg = config(&env);
-        token::Client::new(&env, &cfg.market.asset).transfer(
-            &from,
-            env.current_contract_address(),
-            &amount,
-        );
+        let token = token::Client::new(&env, &cfg.market.asset);
+        let this = env.current_contract_address();
+        let before = token.balance(&this);
+        token.transfer(&from, &this, &amount);
+        assert_eq!(token.balance(&this) - before, amount, "receipt tax");
 
         let lending = XoxnoLending::new(&env, &cfg.lending);
         let stored = env.storage().instance().get(&Key::Account);
@@ -92,14 +95,24 @@ impl LendingVault {
         let cfg = config(&env);
         cfg.owner.require_auth();
         let lending = XoxnoLending::new(&env, &cfg.lending);
+        let token = token::Client::new(&env, &cfg.market.asset);
+        let this = env.current_contract_address();
+        let before = token.balance(&this);
         let withdrawal = lending.withdraw_all(account(&env), &cfg.market);
+        assert_eq!(
+            token.balance(&this) - before,
+            withdrawal.amount,
+            "receipt tax"
+        );
         if withdrawal.account_closed {
             env.storage().instance().remove(&Key::Account);
         }
-        token::Client::new(&env, &cfg.market.asset).transfer(
-            &env.current_contract_address(),
-            &cfg.owner,
-            &withdrawal.amount,
+        let owner_before = token.balance(&cfg.owner);
+        token.transfer(&this, &cfg.owner, &withdrawal.amount);
+        assert_eq!(
+            token.balance(&cfg.owner) - owner_before,
+            withdrawal.amount,
+            "receipt tax"
         );
         withdrawal
     }

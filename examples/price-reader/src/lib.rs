@@ -7,7 +7,7 @@
 
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, I256};
 use xoxno_contract_sdk::lending::price_aggregator::PriceStatus;
 use xoxno_contract_sdk::{LendingAddresses, XoxnoLending};
 
@@ -45,17 +45,19 @@ impl PriceReader {
         lending(&env).value_usd(&asset, amount)
     }
 
-    /// How many base units of `asset` the account can still borrow: its USD
-    /// borrow headroom converted at the current price, rounded down.
+    /// An estimate in base units: USD borrow headroom converted at the current
+    /// price, rounded down. Liquidity, caps and borrowing eligibility can lower
+    /// the amount the protocol accepts.
     pub fn max_borrow(env: Env, account_id: u64, asset: Address) -> i128 {
         let lending = lending(&env);
         let headroom_usd = lending.borrowable_usd(account_id);
         let price = lending.price(&asset);
-        let unit = 10i128.pow(token::Client::new(&env, &asset).decimals());
-        headroom_usd
-            .checked_mul(unit)
-            .map(|scaled| scaled / price)
-            .unwrap_or(i128::MAX)
+        let unit = I256::from_i128(&env, 10).pow(token::Client::new(&env, &asset).decimals());
+        I256::from_i128(&env, headroom_usd)
+            .mul(&unit)
+            .div(&I256::from_i128(&env, price))
+            .to_i128()
+            .unwrap_or_else(|| panic!("borrow estimate overflows i128"))
     }
 }
 

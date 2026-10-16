@@ -1,10 +1,20 @@
 use price_reader::{PriceReader, PriceReaderClient};
 use soroban_sdk::testutils::Address as _;
-use soroban_sdk::{vec, Address, Env};
+use soroban_sdk::{contract, contractimpl, vec, Address, Env};
 use xoxno_contract_sdk::lending::constants::{NEW_ACCOUNT, WAD};
 use xoxno_contract_sdk::testutils::{LendingFixture, Market, MarketConfig};
 
 const UNIT: i128 = 10_000_000;
+
+#[contract]
+struct HighDecimalToken;
+
+#[contractimpl]
+impl HighDecimalToken {
+    pub fn decimals() -> u32 {
+        18
+    }
+}
 
 struct Setup<'a> {
     env: Env,
@@ -84,4 +94,22 @@ fn max_borrow_converts_the_usd_headroom_to_tokens() {
         &None,
     );
     assert_eq!(s.reader.max_borrow(&account, &s.xlm.asset), 0);
+}
+
+#[test]
+fn max_borrow_does_not_overflow_before_dividing_for_18_decimal_tokens() {
+    let s = setup();
+    let user = Address::generate(&s.env);
+    s.usdc.sac.mint(&user, &(10_000 * UNIT));
+    let account = s.fixture.controller.supply(
+        &user,
+        &NEW_ACCOUNT,
+        &s.fixture.spoke_id,
+        &vec![&s.env, (s.usdc.key.clone(), 10_000 * UNIT)],
+    );
+    s.fixture.set_price(&s.xlm, 100 * WAD);
+    // Replace only token metadata: this test reads an estimate, never borrows.
+    s.env.register_at(&s.xlm.asset, HighDecimalToken, ());
+
+    assert_eq!(s.reader.max_borrow(&account, &s.xlm.asset), 76 * WAD);
 }

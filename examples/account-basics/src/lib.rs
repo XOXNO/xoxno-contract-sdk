@@ -5,6 +5,11 @@
 //! - Later deposits reuse the stored account id.
 //! - When the account is closed (a full withdrawal with no debt deletes it and
 //!   burns the NFT), the next deposit opens a new one.
+//!
+//! Contributions belong to the owner; there are no depositor balances or
+//! shares. Tokens must transfer exact amounts; fee-on-transfer tokens are
+//! unsupported. Receipt checks reject shortfalls when funding this contract
+//! or paying its owner.
 
 #![no_std]
 
@@ -65,12 +70,13 @@ impl AccountBasics {
     /// Moves `amount` from `from` into the account and returns the account id.
     pub fn deposit(env: Env, from: Address, amount: i128) -> u64 {
         from.require_auth();
+        assert!(amount > 0, "amount must be positive");
         let cfg = config(&env);
-        token::Client::new(&env, &cfg.market.asset).transfer(
-            &from,
-            env.current_contract_address(),
-            &amount,
-        );
+        let token = token::Client::new(&env, &cfg.market.asset);
+        let this = env.current_contract_address();
+        let before = token.balance(&this);
+        token.transfer(&from, &this, &amount);
+        assert_eq!(token.balance(&this) - before, amount, "receipt tax");
 
         let lending = XoxnoLending::new(&env, &cfg.lending);
         let stored = env.storage().instance().get(&Key::Account);
@@ -88,26 +94,41 @@ impl AccountBasics {
         let cfg = config(&env);
         cfg.owner.require_auth();
         let lending = XoxnoLending::new(&env, &cfg.lending);
+        let token = token::Client::new(&env, &market.asset);
+        let this = env.current_contract_address();
+        let before = token.balance(&this);
         lending.borrow(account(&env), &market, amount);
-        token::Client::new(&env, &market.asset).transfer(
-            &env.current_contract_address(),
-            &cfg.owner,
-            &amount,
+        assert_eq!(token.balance(&this) - before, amount, "receipt tax");
+        let owner_before = token.balance(&cfg.owner);
+        token.transfer(&this, &cfg.owner, &amount);
+        assert_eq!(
+            token.balance(&cfg.owner) - owner_before,
+            amount,
+            "receipt tax"
         );
     }
 
     /// Repays up to `amount` of the debt in `market`, paid by the owner, and
-    /// returns the amount repaid. The part above the debt goes back to the
-    /// owner.
+    /// returns the net token spend. The part above the debt goes back to the
+    /// owner. This example requires tokens that transfer exact amounts.
     pub fn repay(env: Env, market: HubAssetKey, amount: i128) -> i128 {
         let cfg = config(&env);
         cfg.owner.require_auth();
+        assert!(amount > 0, "amount must be positive");
         let this = env.current_contract_address();
         let token = token::Client::new(&env, &market.asset);
+        let before = token.balance(&this);
         token.transfer(&cfg.owner, &this, &amount);
+        assert_eq!(token.balance(&this) - before, amount, "receipt tax");
         let repaid = XoxnoLending::new(&env, &cfg.lending).repay(account(&env), &market, amount);
         if repaid < amount {
+            let owner_before = token.balance(&cfg.owner);
             token.transfer(&this, &cfg.owner, &(amount - repaid));
+            assert_eq!(
+                token.balance(&cfg.owner) - owner_before,
+                amount - repaid,
+                "receipt tax"
+            );
         }
         repaid
     }
@@ -118,14 +139,24 @@ impl AccountBasics {
         let cfg = config(&env);
         cfg.owner.require_auth();
         let lending = XoxnoLending::new(&env, &cfg.lending);
+        let token = token::Client::new(&env, &cfg.market.asset);
+        let this = env.current_contract_address();
+        let before = token.balance(&this);
         let withdrawal = lending.withdraw_all(account(&env), &cfg.market);
+        assert_eq!(
+            token.balance(&this) - before,
+            withdrawal.amount,
+            "receipt tax"
+        );
         if withdrawal.account_closed {
             env.storage().instance().remove(&Key::Account);
         }
-        token::Client::new(&env, &cfg.market.asset).transfer(
-            &env.current_contract_address(),
-            &cfg.owner,
-            &withdrawal.amount,
+        let owner_before = token.balance(&cfg.owner);
+        token.transfer(&this, &cfg.owner, &withdrawal.amount);
+        assert_eq!(
+            token.balance(&cfg.owner) - owner_before,
+            withdrawal.amount,
+            "receipt tax"
         );
         withdrawal
     }

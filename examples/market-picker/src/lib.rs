@@ -1,9 +1,11 @@
 //! Example: choose where to supply a token.
 //!
 //! A token can be listed in several hubs, and each hub market in several
-//! spokes (risk profiles). This contract finds the first hub that lists the
-//! token and the first spoke that accepts it as new collateral, opens an
-//! account there, and reads the market's rates.
+//! spokes (risk profiles). This contract finds the first hub/spoke pair that
+//! accepts the token as new collateral, opens an account there, and reads the
+//! market's rates.
+//! Contributions belong to the configured owner, who alone can withdraw;
+//! there are no depositor shares. Tokens must transfer exact amounts.
 
 #![no_std]
 
@@ -11,7 +13,7 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, token, Address, Env, Vec,
 };
 use xoxno_contract_sdk::lending::controller::HubAssetKey;
-use xoxno_contract_sdk::{LendingAddresses, XoxnoLending};
+use xoxno_contract_sdk::{LendingAddresses, Withdrawal, XoxnoLending};
 
 /// Where to supply: a spoke and a market key (the token in one hub).
 #[contracttype]
@@ -34,6 +36,7 @@ pub struct MarketInfo {
 #[contracttype]
 enum Key {
     Lending,
+    Owner,
 }
 
 #[contracterror]
@@ -48,8 +51,9 @@ pub struct MarketPicker;
 
 #[contractimpl]
 impl MarketPicker {
-    pub fn __constructor(env: Env, lending: LendingAddresses) {
+    pub fn __constructor(env: Env, owner: Address, lending: LendingAddresses) {
         env.storage().instance().set(&Key::Lending, &lending);
+        env.storage().instance().set(&Key::Owner, &owner);
     }
 
     /// The first hub in `hub_ids` that lists `asset`, paired with the first
@@ -86,10 +90,39 @@ impl MarketPicker {
         spoke_ids: Vec<u32>,
     ) -> u64 {
         from.require_auth();
+        assert!(amount > 0, "amount must be positive");
         let placement = Self::pick(env.clone(), asset.clone(), hub_ids, spoke_ids)
             .unwrap_or_else(|| panic_with_error!(&env, PickerError::NoPlacement));
-        token::Client::new(&env, &asset).transfer(&from, env.current_contract_address(), &amount);
+        let token = token::Client::new(&env, &asset);
+        let this = env.current_contract_address();
+        let before = token.balance(&this);
+        token.transfer(&from, &this, &amount);
+        assert_eq!(token.balance(&this) - before, amount, "receipt tax");
         lending(&env).open_account(placement.spoke_id, &placement.market, amount)
+    }
+
+    /// Withdraws the entire market supply to the configured owner. Closing
+    /// burns the account NFT; `supply_best` can open a new account afterwards.
+    pub fn withdraw_all(env: Env, account_id: u64, market: HubAssetKey) -> Withdrawal {
+        let owner: Address = env.storage().instance().get(&Key::Owner).unwrap();
+        owner.require_auth();
+        let token = token::Client::new(&env, &market.asset);
+        let this = env.current_contract_address();
+        let before = token.balance(&this);
+        let withdrawal = lending(&env).withdraw_all(account_id, &market);
+        assert_eq!(
+            token.balance(&this) - before,
+            withdrawal.amount,
+            "receipt tax"
+        );
+        let owner_before = token.balance(&owner);
+        token.transfer(&this, &owner, &withdrawal.amount);
+        assert_eq!(
+            token.balance(&owner) - owner_before,
+            withdrawal.amount,
+            "receipt tax"
+        );
+        withdrawal
     }
 
     /// The market's supply and borrow rates, utilization and cash.
