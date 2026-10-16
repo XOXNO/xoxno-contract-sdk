@@ -6,6 +6,49 @@ All notable changes to this crate are recorded here. The format follows
 means the embedded WASM, the ABI, the `soroban-sdk` major version or the
 fixture API changed.
 
+## [0.2.3] - 2026-10-16
+
+### Changed
+
+- The main guide starts with ownership, authorization and units, then shows a
+  complete owner-controlled deposit, withdrawal, closure and reopening flow
+  with constructor-injected deployment addresses. Advanced recipes link to
+  repository examples and tests instead of duplicating the API reference.
+- Clarified that `repay` and `repay_batch` return net payer spend after
+  refunds, which can differ from debt retired for taxed tokens. Contributor
+  deposits in the examples fund the stored owner; they do not create shares
+  or a withdrawal entitlement.
+- Corrected withdrawal amount documentation: `Withdrawal::amount` and
+  `Withdrawals::amounts` are pool output before receipt tax, not measured
+  recipient receipt. The tutorial checks actual receipt before forwarding
+  funds; withdrawal batches still support one token across multiple hubs.
+- Documented the fixture's authorization, budget and TTL limits, and separated
+  embedded snapshot integrity from current deployment compatibility.
+
+### Fixed
+
+- The price-reader example uses wide arithmetic for headroom estimates, so
+  18-decimal conversions do not saturate on intermediate overflow.
+- Deposit examples expose owner-authorized recovery and close/reopen flows.
+  Contributor examples reject receipt shortfalls before spending pre-funded
+  balances; they remain owner accounts without depositor shares.
+- Release attestations bind every artifact to one immutable source commit.
+  Mainnet checks follow the active aggregator, and the pre-release drift
+  override no longer suppresses RPC failures.
+- Liquidation keeps the original repayment offer and authorizes both exact
+  pull amounts the controller may choose, preserving overoffers needed to
+  cover receipt tax on a full debt close. Results report measured net token
+  spend, which can be negative if seized collateral includes a payment token.
+- Non-withdrawal batches reject each zero or negative input before merging
+  repeated markets, rather than allowing a positive sum to hide an invalid
+  entry.
+- Removed the README's overflow-prone `max_borrow` recipe and its first-hub-only
+  placement recipe; linked the price and nested market-search examples.
+- Corrected the repository release guide's crate changelog path and narrowed
+  the batch-operation claim: `flash_loan` has no batch form.
+- The install guide includes contract crate types and mandatory release
+  overflow checks, verified by a fresh packaged consumer's WASM build.
+
 ## [0.2.2] - 2026-09-24
 
 ### Changed
@@ -20,8 +63,8 @@ fixture API changed.
 ### Added
 
 - Batch operations on several markets in one controller call:
-  `deposit_batch`, `supply_batch`, `borrow_batch`, `repay_batch` (amount
-  repaid per market), `withdraw_batch` (`Withdrawals { amounts,
+  `deposit_batch`, `supply_batch`, `borrow_batch`, `repay_batch` (net token
+  spend per market), `withdraw_batch` (`Withdrawals { amounts,
   account_closed }`) and `liquidate_batch` (amount paid per market). A market
   listed twice is merged as the controller merges it. `repay_batch` and
   `liquidate_batch` take one market per token and panic with
@@ -55,7 +98,7 @@ fixture API changed.
 
 - `XoxnoLending::withdraw` and `withdraw_all` return `Withdrawal` instead of
   the amount.
-- `XoxnoLending::repay` returns the amount repaid. The pool refunds any amount
+- `XoxnoLending::repay` returns net token spend. The pool refunds any amount
   above the debt to the current contract; the return value excludes it, so a
   contract that repays for a user can send the rest back. The README and the
   `account-basics` example do.

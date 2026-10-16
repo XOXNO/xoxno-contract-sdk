@@ -60,7 +60,8 @@ fails when mainnet runs code that the SDK does not embed.
 
 1. Sync the WASM if mainnet changed. Bump the version in
    `crates/xoxno-contract-sdk/Cargo.toml` and in the workspace `Cargo.toml`
-   dependency entry. Add the version's dated section to `CHANGELOG.md`
+   dependency entry. Add the version's dated section to
+   `crates/xoxno-contract-sdk/CHANGELOG.md`
    (`## [X.Y.Z] - YYYY-MM-DD`).
 2. Merge to `main`.
 3. Run the `Publish` workflow on `main` with the version. It checks the
