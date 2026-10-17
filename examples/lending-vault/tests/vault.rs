@@ -1,6 +1,6 @@
 use lending_vault::{LendingVault, LendingVaultClient};
-use soroban_sdk::testutils::Address as _;
-use soroban_sdk::{vec, Address, Bytes, Env};
+use soroban_sdk::testutils::{Address as _, MockAuth, MockAuthInvoke};
+use soroban_sdk::{vec, Address, Bytes, Env, IntoVal};
 use xoxno_contract_sdk::lending::constants::NEW_ACCOUNT;
 use xoxno_contract_sdk::testutils::{LendingFixture, Market, MarketConfig};
 
@@ -104,7 +104,7 @@ fn a_flash_loan_is_repaid_with_the_fee() {
 }
 
 #[test]
-fn a_flash_loan_from_a_stranger_is_rejected() {
+fn a_rejected_flash_leaves_its_fee_recoverable_only_by_the_owner() {
     let s = setup();
     s.usdc.sac.mint(&s.vault.address, &(10 * UNIT));
 
@@ -118,6 +118,22 @@ fn a_flash_loan_from_a_stranger_is_rejected() {
 
     assert!(result.is_err());
     assert_eq!(s.usdc.token.balance(&s.vault.address), 10 * UNIT);
+    s.env.set_auths(&[]);
+    assert!(s.vault.try_sweep(&s.usdc.asset, &(10 * UNIT)).is_err());
+    assert_eq!(s.usdc.token.balance(&s.vault.address), 10 * UNIT);
+    s.vault
+        .mock_auths(&[MockAuth {
+            address: &s.owner,
+            invoke: &MockAuthInvoke {
+                contract: &s.vault.address,
+                fn_name: "sweep",
+                args: (s.usdc.asset.clone(), 10 * UNIT).into_val(&s.env),
+                sub_invokes: &[],
+            },
+        }])
+        .sweep(&s.usdc.asset, &(10 * UNIT));
+    assert_eq!(s.usdc.token.balance(&s.vault.address), 0);
+    assert_eq!(s.usdc.token.balance(&s.owner), 10 * UNIT);
 }
 
 #[test]

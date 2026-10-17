@@ -9,6 +9,7 @@ crate is [`crates/xoxno-contract-sdk`](crates/xoxno-contract-sdk); its
 | `crates/xoxno-contract-sdk` | The published crate: the `XoxnoLending` wrapper, generated clients, types, WASM, helpers and the `testutils` fixture |
 | `crates/xoxno-contract-sdk/wasm` | Embedded contract WASM and `MANIFEST.json` |
 | `examples/*` | Example integrator contracts and their tests (not published): `simple-deposit`, `account-basics`, `market-picker`, `price-reader`, `liquidator`, `lending-vault` |
+| `tests/e2e` | Existing-testnet deployment runner, outcome assertions and workflow guide |
 | `scripts` | WASM sync, manifest, mainnet and README example checks |
 
 ## Development
@@ -28,6 +29,8 @@ stellar contract build
 
 `soroban-sdk` 28 builds contracts only through `stellar contract build`
 (stellar-cli 25.2 or newer).
+
+The [SDK testnet E2E workflow](tests/e2e/README.md) deploys the examples against the existing lending testnet and verifies committed transactions and resulting balances/accounts. Run it manually from GitHub Actions, without secrets.
 
 ## Update the embedded WASM
 

@@ -117,6 +117,17 @@ impl LendingVault {
         withdrawal
     }
 
+    /// Recovers idle tokens, including unused flash-loan fees, to the owner.
+    pub fn sweep(env: Env, asset: Address, amount: i128) {
+        let cfg = config(&env);
+        cfg.owner.require_auth();
+        assert!(amount > 0, "amount must be positive");
+        let token = token::Client::new(&env, &asset);
+        let before = token.balance(&cfg.owner);
+        token.transfer(&env.current_contract_address(), &cfg.owner, &amount);
+        assert_eq!(token.balance(&cfg.owner) - before, amount, "receipt tax");
+    }
+
     /// Value of the vault's position in the market token, interest included.
     pub fn balance(env: Env) -> i128 {
         let cfg = config(&env);

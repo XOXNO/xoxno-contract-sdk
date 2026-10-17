@@ -34,6 +34,9 @@ jobs:
       - name: Release and drift check regressions
         run: python3 -m unittest discover -s scripts -p 'test_*.py'
 
+      - name: Testnet harness regressions (offline)
+        run: python3 -m unittest discover -s tests/e2e -p 'test_*.py'
+
       - name: Install stellar-cli
         run: bash .github/scripts/install-stellar-cli.sh
 

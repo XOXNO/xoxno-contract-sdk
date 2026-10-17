@@ -254,6 +254,11 @@ Examples are repository source, excluded from the published crate:
 | [liquidator][liquidator] | [liquidation tests][liquidator-tests] | Liquidation offers, refunds and seized collateral |
 | [lending-vault][vault] | [vault tests][vault-tests] | Owner account funded by contributors and a flash receiver; no shares |
 
+The [live testnet E2E workflow][e2e] builds these examples with the workspace SDK,
+deploys them against the existing lending testnet, and verifies committed receipts,
+balances, account recovery and a flash loan. Run it manually with fresh Friendbot
+wallets; no secrets are required. Its guide lists the covered and excluded flows.
+
 ## Fixture limits
 
 `LendingFixture::deploy` deploys governance, controller, pool, position NFT,
@@ -319,3 +324,5 @@ MIT. [XOXNO Lending] contract source has its own license.
 [vault-tests]: https://github.com/XOXNO/xoxno-contract-sdk/blob/main/examples/lending-vault/tests/vault.rs
 [wrapper-tests]: https://github.com/XOXNO/xoxno-contract-sdk/blob/main/crates/xoxno-contract-sdk/tests/wrapper.rs
 [fixture-tests]: https://github.com/XOXNO/xoxno-contract-sdk/blob/main/crates/xoxno-contract-sdk/tests/fixture.rs
+
+[e2e]: https://github.com/XOXNO/xoxno-contract-sdk/blob/main/tests/e2e/README.md
