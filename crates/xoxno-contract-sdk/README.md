@@ -213,6 +213,7 @@ rates and prices. These are the important accounting and authorization rules:
   full offer on a debt close or only a planned amount on a partial repayment.
   Results measure net token spend, including refunds and seized collateral;
   they can be negative when seized collateral includes the payment token.
+  Healthy accounts cause a contract error; use `is_liquidatable` for a preflight check.
 - Repayment and liquidation batches accept only one market per token. Using
   one token in two hubs in the same call panics with
   `GenericError::InvalidPayments`; use separate calls.
@@ -253,11 +254,16 @@ Examples are repository source, excluded from the published crate:
 | [price-reader][prices] | [price tests][price-tests] | Strict/fallible prices, USD values and headroom estimates |
 | [liquidator][liquidator] | [liquidation tests][liquidator-tests] | Liquidation offers, refunds and seized collateral |
 | [lending-vault][vault] | [vault tests][vault-tests] | Owner account funded by contributors and a flash receiver; no shares |
+| [advanced-account][advanced] | [advanced tests][advanced-tests] | Batches, strategies, authenticated flash positions and Blend migration |
 
-The [live testnet E2E workflow][e2e] builds these examples with the workspace SDK,
-deploys them against the existing lending testnet, and verifies committed receipts,
-balances, account recovery and a flash loan. Run it manually with fresh Friendbot
-wallets; no secrets are required. Its guide lists the covered and excluded flows.
+The [live testnet E2E workflow][e2e] checks the examples against the existing
+lending testnet. Its advanced lane exercises all six batch methods, multiply,
+debt/collateral swaps, collateral-funded repayment, and flash positions. An
+isolated deployment tests successful liquidation and real Blend migration.
+The [coverage inventory][coverage] separates live checks from fixture tests.
+The owner-controlled [advanced account][advanced] demonstrates these integrations
+and a separate authenticated flash-position receiver. It accepts exact-transfer
+tokens and issues no depositor shares.
 
 ## Fixture limits
 
@@ -326,3 +332,7 @@ MIT. [XOXNO Lending] contract source has its own license.
 [fixture-tests]: https://github.com/XOXNO/xoxno-contract-sdk/blob/main/crates/xoxno-contract-sdk/tests/fixture.rs
 
 [e2e]: https://github.com/XOXNO/xoxno-contract-sdk/blob/main/tests/e2e/README.md
+
+[advanced]: https://github.com/XOXNO/xoxno-contract-sdk/blob/main/examples/advanced-account/src/lib.rs
+[advanced-tests]: https://github.com/XOXNO/xoxno-contract-sdk/blob/main/examples/advanced-account/tests/flows.rs
+[coverage]: https://github.com/XOXNO/xoxno-contract-sdk/blob/main/tests/e2e/COVERAGE.md

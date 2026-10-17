@@ -16,7 +16,7 @@ import tempfile
 import time
 import urllib.request
 
-from receipts import codec, decode, verify
+from receipts import codec, decode, verify, verify_classic
 
 ROOT = Path(__file__).resolve().parents[2]
 PASSPHRASE = 'Test SDF Network ; September 2015'
@@ -50,14 +50,30 @@ def checked_invocation(envelope, source, expected):
     return invocation
 
 
-def final_status(report):
-    return ('PASS' if set(report['cases']) == REQUIRED
+def add_fee_headroom(envelope):
+    transaction = envelope['tx']['tx']
+    data = transaction['ext']['v1']
+    resource_fee = int(data['resource_fee'])
+    require(resource_fee >= 0, 'negative resource fee')
+    extra = max(100_000, (resource_fee + 1) // 2)
+    total = int(transaction['fee']) + extra
+    require(total <= 2**32 - 1, 'transaction fee exceeds u32')
+    data['resource_fee'] = str(resource_fee + extra)
+    transaction['fee'] = total
+    return envelope
+
+
+def final_status(report, required=REQUIRED):
+    return ('PASS' if set(report['cases']) == required
             and all(report['cases'].values()) and not report['errors']
             and not report['open_accounts'] and not report['unknown_outcome']
+            and not report.get('blend_open', False)
             and not any(report.get('residual_balances', {}).values()) else 'FAIL')
 
 
 class Run:
+    examples = EXAMPLES
+    required = REQUIRED
     def __init__(self, config, output, wasm_dir, private):
         self.config, self.output, self.wasm_dir = config, output, wasm_dir
         output.mkdir(parents=True, exist_ok=False)
@@ -79,19 +95,42 @@ class Run:
         print('PASS', name, flush=True)
 
     def rpc(self, method, params=None):
+        require(method in {'getNetwork', 'getLatestLedger', 'getTransaction', 'simulateTransaction'},
+                'runner RPC must be read-only')
         payload = {'jsonrpc': '2.0', 'id': 1, 'method': method, 'params': params or {}}
         request = urllib.request.Request(self.config['rpc_url'], json.dumps(payload).encode(),
                                          {'Content-Type': 'application/json', 'User-Agent': 'xoxno-sdk-e2e'})
-        with urllib.request.urlopen(request, timeout=40) as response:
-            data = json.load(response)
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(request, timeout=40) as response:
+                    data = json.load(response)
+                break
+            except OSError:
+                if attempt == 2:
+                    raise
+                time.sleep(2)
         require(data.get('id') == 1 and data.get('jsonrpc') == '2.0' and 'error' not in data,
                 f'{method}: RPC error: {data}')
         return data
 
     def cli(self, args, role='owner', stdin=None, check=True):
         command = ['stellar', '--config-dir', str(self.private / role), '--no-cache', *args]
-        result = subprocess.run(command, input=stdin, text=True, capture_output=True,
-                                timeout=180, env=self.env, cwd=ROOT)
+        readonly = ('--build-only' in args or '--send=no' in args or args[:2] == ['tx', 'simulate']
+                    or args[:3] == ['ledger', 'entry', 'fetch'])
+        for attempt in range(3 if readonly else 1):
+            try:
+                result = subprocess.run(command, input=stdin, text=True, capture_output=True,
+                                        timeout=180, env=self.env, cwd=ROOT)
+            except subprocess.TimeoutExpired:
+                if not readonly or attempt == 2:
+                    raise
+                time.sleep(2)
+                continue
+            transient = any(message in result.stderr.lower() for message in
+                            ('timeout', 'client error (sendrequest)', 'connection reset', 'error sending request'))
+            if not readonly or not result.returncode or not transient or attempt == 2:
+                break
+            time.sleep(2)
         if check and result.returncode:
             raise RuntimeError(result.stderr[-4000:])
         return result
@@ -121,7 +160,7 @@ class Run:
                     {'contract_fn': expected['invoke_contract']}, 'unexpected owner authorization root')
             credential = entry['credentials']['address']
             require(credential['address'] == self.owner, 'unexpected required signer')
-            credential['signature_expiration_ledger'] = self.rpc('getLatestLedger')['result']['sequence'] + 60
+            credential['signature_expiration_ledger'] = self.rpc('getLatestLedger')['result']['sequence'] + 600
             preimage = {'soroban_authorization': {
                 'network_id': hashlib.sha256(PASSPHRASE.encode()).hexdigest(),
                 'nonce': credential['nonce'],
@@ -156,6 +195,10 @@ class Run:
         require(not self.report['unknown_outcome'], 'mutation blocked by unknown transaction outcome')
         built = self.cli([*args[:args.index('--')], '--build-only', *args[args.index('--'):]]
                          if '--' in args else [*args, '--build-only']).stdout.strip()
+        return self.mutate_built(label, built)
+
+    def mutate_built(self, label, built):
+        require(not self.report['unknown_outcome'], 'mutation blocked by unknown transaction outcome')
         expected = decode('TransactionEnvelope', built)['tx']['tx']['operations'][0]['body']['invoke_host_function']['host_function']
         self.index += 1
         stem = self.output / f'{self.index:03d}-{label}'
@@ -165,10 +208,15 @@ class Run:
         authorized = self.sign_auth(assembled, expected)
         enforced = self.cli(['tx', 'simulate', *self.net, '--source', 'payer', '--auth-mode', 'enforce',
                              '--instruction-leeway', '20000000'], stdin=authorized).stdout.strip()
-        signed = self.cli(['tx', 'sign', *self.net, '--sign-with-key', 'payer'], stdin=enforced).stdout.strip()
+        buffered = codec('encode', 'TransactionEnvelope', json.dumps(add_fee_headroom(decode('TransactionEnvelope', enforced))))
+        signed = self.cli(['tx', 'sign', *self.net, '--sign-with-key', 'payer'], stdin=buffered).stdout.strip()
         final = checked_invocation(decode('TransactionEnvelope', signed), self.payer, expected)
         original = checked_invocation(decode('TransactionEnvelope', authorized), self.payer, expected)
         require(final.get('auth', []) == original.get('auth', []), 'enforced simulation changed authorization')
+        return self.submit(label, stem, signed, self.payer, expected, verify)
+
+    def submit(self, label, stem, signed, source, expected, verifier):
+        require(not self.report['unknown_outcome'], 'mutation blocked by unknown transaction outcome')
         tx_hash = self.cli(['tx', 'hash', '--network-passphrase', PASSPHRASE], stdin=signed).stdout.strip()
         require(re.fullmatch('[0-9a-f]{64}', tx_hash) is not None, 'invalid transaction hash')
         item = {'label': label, 'hash': tx_hash, 'status': 'UNKNOWN'}
@@ -198,11 +246,11 @@ class Run:
         item['status'] = receipt['result']['status']
         self.save()
         if item['status'] == 'FAILED':
-            verify(receipt, tx_hash, PASSPHRASE, self.payer, expected, status='FAILED')
+            verifier(receipt, tx_hash, PASSPHRASE, source, expected, status='FAILED')
             self.report['unknown_outcome'] = False
             self.save()
             raise ValueError(f'{label}: committed transaction failed: {tx_hash}')
-        value = verify(receipt, tx_hash, PASSPHRASE, self.payer, expected)
+        value = verifier(receipt, tx_hash, PASSPHRASE, source, expected)
         item['return'] = value
         self.report['unknown_outcome'] = False
         self.save()
@@ -213,8 +261,42 @@ class Run:
                                   '--source', 'payer', '--auto-sign',
                                   '--instruction-leeway', '20000000', '--send=yes', '--', method, *arguments(values)])
 
+    def classic(self, operation, **values):
+        require(operation in {'change-trust', 'create-account'}, 'unsupported setup operation')
+        built = self.cli(['tx', 'new', operation, *self.net, '--source', 'owner',
+                          *arguments(values), '--build-only']).stdout.strip()
+        transaction = decode('TransactionEnvelope', built)['tx']['tx']
+        require(transaction['source_account'] == self.owner and len(transaction['operations']) == 1,
+                'unexpected classic transaction')
+        body = transaction['operations'][0]['body']
+        require(set(body) == {operation.replace('-', '_')}, 'unexpected classic operation')
+        signed = self.cli(['tx', 'sign', *self.net, '--sign-with-key', 'owner'], stdin=built).stdout.strip()
+        require(decode('TransactionEnvelope', signed)['tx']['tx'] == transaction, 'signing changed setup transaction')
+        self.index += 1
+        stem = self.output / f'{self.index:03d}-{operation}'
+        stem.with_suffix('.request.json').write_text(json.dumps(body, indent=2) + '\n')
+        return self.submit(operation, stem, signed, self.owner, body, verify_classic)
+
     def balance(self, address):
         return int(self.view(self.config['asset'], 'balance', id=address))
+
+    def fund_owner(self):
+        for attempt in range(3):
+            funded = subprocess.run(['curl', '-q', '-fsS', '--connect-timeout', '10', '--max-time', '60',
+                                     'https://friendbot.stellar.org/?addr=' + self.owner],
+                                    capture_output=True, text=True, timeout=70)
+            (self.output / f'friendbot-owner-{attempt}.json').write_text(json.dumps({
+                'exit_code':funded.returncode, 'stdout':funded.stdout, 'stderr':funded.stderr}, indent=2) + '\n')
+            if funded.returncode == 0:
+                require(json.loads(funded.stdout).get('successful') is True, 'Friendbot did not fund owner')
+                return
+            # Funding may commit even when Friendbot's HTTP response times out.
+            balance = self.cli(['contract', 'invoke', *self.net, '--source', 'owner', '--id', self.config['asset'],
+                                '--send=no', '--', 'balance', '--id', self.owner], check=False)
+            if balance.returncode == 0 and int(json.loads(balance.stdout)) >= 1_000 * 10_000_000:
+                self.report['friendbot_funding_confirmed_by_balance'] = True
+                return
+        raise RuntimeError('Friendbot failed to fund owner after three attempts')
 
     def setup(self):
         require(self.config['network_passphrase'] == PASSPHRASE, 'refusing non-testnet configuration')
@@ -234,13 +316,10 @@ class Run:
                 self.cli(['keys', 'generate', name], role)
                 address = self.cli(['keys', 'address', name], role).stdout.strip()
                 setattr(self, name, address)
-                funded = subprocess.run(['curl', '-q', '-fsS', '--max-time', '60',
-                                         'https://friendbot.stellar.org/?addr=' + address],
-                                        capture_output=True, text=True, timeout=70)
-                require(funded.returncode == 0, f'Friendbot failed for {name}: {funded.stderr}')
-                (self.output / f'friendbot-{name}.json').write_text(funded.stdout)
-                require(json.loads(funded.stdout).get('successful') is True, f'Friendbot did not fund {name}')
         self.report['wallets'] = {'owner': self.owner, 'payer': self.payer, 'attacker': self.attacker}
+        self.fund_owner()
+        for address in (self.payer, self.attacker):
+            self.classic('create-account', destination=address, **{'starting-balance': 100 * 10_000_000})
         controller = self.instance(self.config['controller'])
         storage = {entry['key']['vec'][0]['symbol']: entry['val'] for entry in controller['storage']}
         for key, name in [('Pool', 'pool'), ('PositionNft', 'position_nft')]:
@@ -259,23 +338,31 @@ class Run:
                 'testnet market does not permit lifecycle')
         require(not self.view(self.controller, 'get_spoke', spoke_id=self.config['spoke_id'])['is_deprecated'], 'spoke deprecated')
         require(int(self.view(native, 'decimals')) == 7, 'unexpected XLM decimals')
-        for name in EXAMPLES:
+        for name in self.examples:
             wasm = self.wasm_dir / (name + '.wasm')
-            digest = hashlib.sha256(wasm.read_bytes()).hexdigest()
-            uploaded = self.mutate('upload-' + name, ['contract', 'upload', *self.net, '--source', 'payer',
-                                                     '--wasm', str(wasm), '--optimize=false'])
-            require(uploaded == digest, 'uploaded WASM hash differs from built artifact')
-            constructor = {'lending': self.lending}
-            if name != 'price_reader':
-                constructor['owner'] = self.owner
-            if name in {'account_basics', 'lending_vault'}:
-                constructor.update(market=self.market, spoke_id=self.config['spoke_id'])
-            address = self.mutate('deploy-' + name, ['contract', 'deploy', *self.net, '--source', 'payer',
-                                                    '--wasm', str(wasm), '--optimize=false', '--salt', secrets.token_hex(32), '--', *arguments(constructor)])
-            self.report['contracts'][name] = {'address': address, 'wasm_sha256': digest}
-            require(self.instance(address)['executable']['wasm'] == digest, 'deployed WASM differs from build')
-            setattr(self, name, address)
+            self.deploy(name, wasm, self.constructor(name))
         self.case('deployment')
+
+    def constructor(self, name):
+        constructor = {'lending': self.lending}
+        if name != 'price_reader':
+            constructor['owner'] = self.owner
+        if name in {'account_basics', 'lending_vault'}:
+            constructor.update(market=self.market, spoke_id=self.config['spoke_id'])
+        return constructor
+
+    def deploy(self, name, wasm, constructor):
+        digest = hashlib.sha256(wasm.read_bytes()).hexdigest()
+        uploaded = self.mutate('upload-' + name, ['contract', 'upload', *self.net, '--source', 'payer',
+                                                 '--wasm', str(wasm), '--optimize=false'])
+        require(uploaded == digest, 'uploaded WASM hash differs from built artifact')
+        address = self.mutate('deploy-' + name, ['contract', 'deploy', *self.net, '--source', 'payer',
+                                                    '--wasm', str(wasm), '--optimize=false', '--salt', secrets.token_hex(32), '--', *arguments(constructor)])
+        self.report['contracts'][name] = {'address': address, 'wasm_sha256': digest}
+        self.save()
+        require(self.instance(address)['executable']['wasm'] == digest, 'deployed WASM differs from build')
+        setattr(self, name, address)
+        return address
 
     def owned(self, contract, account_id):
         require(int(account_id) > 0, 'invalid new account id')
@@ -451,13 +538,14 @@ class Run:
         self.case('cleanup')
 
 
-def main():
+def main(run_type=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, default=ROOT / 'target' / ('testnet-e2e-' + time.strftime('%Y%m%d-%H%M%S')))
     parser.add_argument('--wasm-dir', type=Path, default=ROOT / 'target' / 'testnet-e2e-wasm')
     args = parser.parse_args()
     private = tempfile.mkdtemp(prefix='xoxno-sdk-e2e-')
-    run = Run(json.loads(Path(__file__).with_name('testnet.json').read_text()), args.output.resolve(), args.wasm_dir.resolve(), private)
+    run_type = run_type or Run
+    run = run_type(json.loads(Path(__file__).with_name('testnet.json').read_text()), args.output.resolve(), args.wasm_dir.resolve(), private)
     try:
         run.setup()
         run.scenarios()
@@ -476,7 +564,7 @@ def main():
             print('Private recovery keys retained locally:', private, file=sys.stderr, flush=True)
         else:
             shutil.rmtree(private)
-        run.report['status'] = final_status(run.report)
+        run.report['status'] = final_status(run.report, getattr(run, 'required', REQUIRED))
         run.save()
         print(run.report['status'], args.output / 'report.json', flush=True)
     return 0 if run.report['status'] == 'PASS' else 1

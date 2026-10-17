@@ -1,13 +1,16 @@
 # SDK examples on lending testnet
 
-This lane builds and deploys all six Rust SDK example contracts, then executes them
-against the **existing** XOXNO Lending testnet. It checks the SDK's contract
+The workflow builds seven Rust SDK example contracts and runs three required lanes.
+`run.py` executes the six baseline examples against the **existing** XOXNO Lending testnet.
+`advanced.py` exercises batches and routed strategies there. `controlled.py` deploys
+a separate protocol from the SDK-attested WASM for liquidation and real Blend migration. It checks the SDK's contract
 integration, including contract authorization, actual token payments and account
-lifecycle. The protocol repository's E2E lane deploys its own protocol; this lane
-does not.
+lifecycle. The [coverage inventory](COVERAGE.md) distinguishes live proof from fixture tests.
 
 Run **Actions → SDK testnet E2E → Run workflow**. No secrets or pre-funded wallets
-are needed. The workflow uses fresh Friendbot accounts and never changes shared
+are needed. One disposable Friendbot owner funds a separate payer and attacker
+through verified classic account-creation receipts. If Friendbot times out, setup
+checks the new owner on-chain before retrying. The workflow never changes shared
 protocol governance, market parameters or oracle configuration. It runs manually
 to avoid consuming shared testnet capacity on every PR.
 
@@ -17,6 +20,8 @@ Locally, with Rust 1.95, Python 3, curl, OpenSSL 3+ and Stellar CLI 28.0.0:
 stellar contract build --locked --out-dir target/testnet-e2e-wasm
 python3 -m unittest discover -s tests/e2e -p 'test_*.py'
 python3 tests/e2e/run.py
+python3 tests/e2e/advanced.py
+python3 tests/e2e/controlled.py
 ```
 
 The CLI installer is `.github/scripts/install-stellar-cli.sh`. Run from the SDK
@@ -62,6 +67,10 @@ private key material stays in the private directory. Before submission the runne
 saves the exact signed envelope and hash, plus the parsed request and CLI output. The runner reconciles that hash with `getTransaction`; it never retries a
 submitted mutation. It verifies the committed envelope hash, payer, arguments,
 result and return/events success hash, then asserts balances and protocol state.
+Read/build/simulation requests may retry transient transport errors; submitted
+transactions never retry.
+Before payer signing, the harness adds resource-fee headroom of 0.01 XLM or
+50% of the estimate, whichever is larger. Unused refundable fees return to the payer.
 Each uploaded WASM is bound to its committed request and returned hash. Each new deployment's
 live WASM hash must match the exact optimized build, with one explicit salt shared
 by the build-only request and submission.
@@ -80,8 +89,19 @@ leave positions behind; workflow concurrency does not cancel an active run. All
 funds are disposable Friendbot XLM. The vault owner can sweep unused flash fees after a rejected loan; the runner
 tests this recovery and uses it during cleanup.
 
-This lane does not cover successful liquidation of an unhealthy account, swaps,
-Blend migration, multiple-token batches, fee-on-transfer tokens, or mainnet. Those
-need separate fixtures/markets; forcing shared oracle prices would make this lane
-unsafe for other testnet users. Keep local fixture tests and protocol E2E alongside
-this compatibility check.
+The advanced lane uses native XLM and USDC across hubs 1/2 in spoke 3. It funds
+USDC with a real router quote, creates an owner trustline, and recovers every
+account and touched token. Testnet AMM prices can differ greatly from oracle
+prices, so strategy draws are small relative to initial equity.
+
+The controlled lane owns a fresh governance/controller/pool/NFT/aggregator and
+mock oracles, using the SDK's embedded deployment WASM. It approves the real
+Blend pool only in that deployment. Blend's test token addresses differ from
+this protocol's USDC; migration therefore uses the common native XLM reserve.
+Unused migration caps repay the new hub debt; they are not promised as owner
+cash refunds. Shared testnet governance and oracle prices are never changed.
+
+These scripts are examples for exact-transfer tokens, owned entirely by one
+owner, with no depositor shares. The flash-position receiver deliberately uses
+its prefunded collateral as equity and authenticates both controller and initiator.
+The examples are not published inside the SDK crate.

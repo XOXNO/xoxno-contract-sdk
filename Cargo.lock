@@ -11,6 +11,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "advanced-account"
+version = "0.0.0"
+dependencies = [
+ "soroban-sdk",
+ "xoxno-contract-sdk",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"

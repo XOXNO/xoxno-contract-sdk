@@ -32,6 +32,8 @@ def plain(value):
         result = {}
         for entry in item:
             key = plain(entry['key'])
+            if type(key) is int:
+                key = str(key)
             if not isinstance(key, str) or key in result:
                 raise ValueError('invalid or duplicate map key')
             result[key] = plain(entry['val'])
@@ -39,8 +41,7 @@ def plain(value):
     raise ValueError('unsupported SCVal: ' + kind)
 
 
-def verify(receipt, tx_hash, passphrase, source, expected_host, status='SUCCESS'):
-    """Return the committed return value, never a simulation's prediction."""
+def committed(receipt, tx_hash, passphrase, source, status):
     if receipt.get('jsonrpc') != '2.0' or receipt.get('id') != 1 or 'error' in receipt:
         raise ValueError('invalid JSON-RPC receipt')
     result = receipt['result']
@@ -59,10 +60,27 @@ def verify(receipt, tx_hash, passphrase, source, expected_host, status='SUCCESS'
     operations = transaction['operations']
     if transaction['source_account'] != source or len(operations) != 1:
         raise ValueError('unexpected source or operation count')
-    host = operations[0]['body']['invoke_host_function']['host_function']
-    if host != expected_host:
-        raise ValueError('receipt host function differs from built request')
     outcome = decode('TransactionResult', result['resultXdr'])
+    return result, operations[0]['body'], outcome
+
+
+def verify_classic(receipt, tx_hash, passphrase, source, expected_body, status='SUCCESS'):
+    result, body, outcome = committed(receipt, tx_hash, passphrase, source, status)
+    if body != expected_body or len(body) != 1 or next(iter(body)) not in {'change_trust', 'create_account'}:
+        raise ValueError('receipt classic operation differs from request')
+    operation = next(iter(body))
+    expected = ({'tx_failed': outcome['result'].get('tx_failed')} if status == 'FAILED' else
+                {'tx_success': [{'op_inner': {operation: 'success'}}]})
+    if outcome['result'] != expected:
+        raise ValueError('trustline result contradicts status')
+    return None
+
+
+def verify(receipt, tx_hash, passphrase, source, expected_host, status='SUCCESS'):
+    """Return the committed return value, never a simulation's prediction."""
+    result, body, outcome = committed(receipt, tx_hash, passphrase, source, status)
+    if body['invoke_host_function']['host_function'] != expected_host:
+        raise ValueError('receipt host function differs from built request')
     if status == 'FAILED':
         if set(outcome['result']) != {'tx_failed'}:
             raise ValueError('FAILED status contradicts result')
