@@ -279,8 +279,8 @@ impl XoxnoLending {
 
     /// [`withdraw`](Self::withdraw) for several markets in one call.
     /// [`WITHDRAW_ALL`] withdraws the whole supply of its market. A market
-    /// listed twice is withdrawn once with the sum, or in full if either
-    /// amount is [`WITHDRAW_ALL`].
+    /// listed twice is withdrawn once with the sum; a second leg for a market
+    /// that uses [`WITHDRAW_ALL`] overflows the sum and fails.
     pub fn withdraw_batch(
         &self,
         account_id: u64,

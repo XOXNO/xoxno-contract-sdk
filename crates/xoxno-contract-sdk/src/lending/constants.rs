@@ -23,8 +23,11 @@ pub const WAD_DECIMALS: u32 = 18;
 /// `flash_position` and `migrate_from_blend`.
 pub const NEW_ACCOUNT: u64 = 0;
 
-/// Withdraw amount that withdraws the whole supply position.
-pub const WITHDRAW_ALL: i128 = 0;
+/// Withdraw amount that withdraws the whole supply position: `i128::MAX`.
+/// Any amount at or above the position withdraws all of it. The controller
+/// also reads 0 as withdraw-all, but 0 is deprecated: a later controller
+/// release rejects it.
+pub const WITHDRAW_ALL: i128 = i128::MAX;
 
 /// Maximum number of delegates on one account.
 pub const MAX_DELEGATES: u32 = 16;
