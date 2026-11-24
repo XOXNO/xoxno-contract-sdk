@@ -6,6 +6,19 @@ All notable changes to this crate are recorded here. The format follows
 means the embedded WASM, the ABI, the `soroban-sdk` major version or the
 fixture API changed.
 
+## [0.3.1] - 2026-11-24
+
+### Changed
+
+- `WITHDRAW_ALL` is `i128::MAX`, not `0`, so `withdraw_all` and
+  `WITHDRAW_ALL` batch legs send `i128::MAX`. Any amount at or above the
+  position withdraws all of it, so the result on the current controller is
+  unchanged. The controller still reads `0` as withdraw-all, but `0` is
+  deprecated: a later controller release rejects it. Rebuild contracts on
+  this version before that release.
+- The `withdraw_batch` and README docs no longer say `WITHDRAW_ALL` wins over
+  another leg for the same market. That second leg fails.
+
 ## [0.3.0] - 2026-10-16
 
 ### Changed
