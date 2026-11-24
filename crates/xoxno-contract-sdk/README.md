@@ -194,7 +194,8 @@ rates and prices. These are the important accounting and authorization rules:
 
 - `deposit`, `supply`, `borrow`, `repay`, `withdraw` and `liquidate` have batch
   forms taking `&Vec<(HubAssetKey, i128)>`. `flash_loan` has no batch form.
-  Repeated markets are merged; `WITHDRAW_ALL` (0) wins in a withdrawal batch.
+  Repeated markets are merged. `WITHDRAW_ALL` (`i128::MAX`) withdraws a whole
+  position; list its market once, because a second leg overflows the sum.
   Returned amount vectors preserve merged request order; liquidation omits
   offers the plan does not use.
   Non-withdrawal batch amounts must each be positive, including duplicates.
